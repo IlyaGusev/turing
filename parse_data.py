@@ -71,5 +71,14 @@ def parse(filename, get_df=True):
             df["context"] = [dialog.context for dialog in result]
             df["messages"] = [[message.text for message in dialog.messages] for dialog in result]
             df["message_users"] = [[message.user_id for message in dialog.messages] for dialog in result]
+            if result[0].first_user_is_bot is not None:
+                bob_is_bot = [bool(dialog.first_user_is_bot) and dialog.first_user_id == "Bob" or
+                              bool(dialog.second_user_is_bot) and dialog.second_user_id == "Bob" for dialog in result]
+                alice_is_bot = [bool(dialog.first_user_is_bot) and dialog.first_user_id == "Alice" or
+                                bool(dialog.second_user_is_bot) and dialog.second_user_id == "Alice" for dialog in result]
+                df["BobIsBot"] = bob_is_bot
+                df["AliceIsBot"] = alice_is_bot
             return df
         return result
+
+print(parse("/home/yallen/Документы/train_20170724.json"))
