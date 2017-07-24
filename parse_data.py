@@ -71,6 +71,5 @@ def parse(filename, get_df=True):
             df["context"] = [dialog.context for dialog in result]
             df["messages"] = [[message.text for message in dialog.messages] for dialog in result]
             df["message_users"] = [[message.user_id for message in dialog.messages] for dialog in result]
-            print(df)
             return df
         return result
