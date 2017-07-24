@@ -1,5 +1,6 @@
 import json
 from collections import namedtuple
+import pandas as pd
 
 
 class Dialog:
@@ -36,7 +37,7 @@ class Dialog:
         return self.__str__()
 
 
-def parse(filename):
+def parse(filename, get_df=True):
     with open(filename, "r", encoding="utf-8") as f:
         text = f.read()
         dialogs = []
@@ -64,4 +65,12 @@ def parse(filename):
             for message in messages:
                 dialog.add_message(message["userId"], message["text"])
             result.append(dialog)
+        if get_df:
+            df = pd.DataFrame()
+            df["dialogId"] = [dialog.dialog_id for dialog in result]
+            df["context"] = [dialog.context for dialog in result]
+            df["messages"] = [[message.text for message in dialog.messages] for dialog in result]
+            df["message_users"] = [[message.user_id for message in dialog.messages] for dialog in result]
+            print(df)
+            return df
         return result
