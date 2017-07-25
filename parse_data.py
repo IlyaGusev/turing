@@ -80,5 +80,3 @@ def parse(filename, get_df=True):
                 df["AliceIsBot"] = alice_is_bot
             return df
         return result
-
-print(parse("/home/yallen/Документы/train_20170724.json"))
