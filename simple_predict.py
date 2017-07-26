@@ -1,6 +1,5 @@
 import copy
 import re
-import os
 import pandas as pd
 import numpy as np
 
@@ -9,13 +8,17 @@ from pymorphy2 import MorphAnalyzer
 from nltk.stem.snowball import SnowballStemmer
 from nltk import pos_tag
 from sklearn.svm import LinearSVC
-from scipy.sparse import hstack
-from sklearn.metrics import roc_auc_score, make_scorer
-from sklearn.model_selection import ShuffleSplit, cross_val_score
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import  Lasso
+from scipy import stats
 
-from parse_data import parse
+from parse_data import parse_dir
 morph_ru = MorphAnalyzer()
 morph_en = SnowballStemmer("english")
+
+
+def spearman(a, b):
+    return stats.spearmanr(a, b)[0]
 
 
 def text_to_wordlist(sentence, cyrillic=False):
@@ -71,62 +74,94 @@ def bow(train_texts, test_texts, language='en', stem=False, tokenizer=text_to_wo
     data = vectorizer.fit_transform(data)
     train_data = data[:len(train)]
     test_data = data[len(train):]
-    return train_data, test_data
+    return train_data.todense(), test_data.todense()
 
 
-def predict(filename):
-    dialogs = parse(filename, get_df=False)
-    l = len(dialogs)
-    answers = []
-    messages = []
-    additional_features = [[], [], [], []]
-    for user_id in ["Bob", "Alice"]:
-        answer = [int(bool(dialog.first_user_is_bot) and dialog.first_user_id == user_id or
-                  bool(dialog.second_user_is_bot) and dialog.second_user_id == user_id) for dialog in dialogs]
-        answers += answer
-        texts = [[message.text for message in dialog.messages if message.user_id == user_id] for dialog in dialogs]
-        concatenated_messages = []
-        for text in texts:
-            concatenated_messages.append("")
-            for message in text:
-                concatenated_messages[-1] += message + ". "
-        messages += concatenated_messages
-        additional_features[0] += [len(text) for text in texts]
-        additional_features[1] += [np.mean([0] + [len(message.split()) for message in text]) for text in texts]
-        additional_features[2] += [np.mean([0] + [len(message) for message in text]) for text in texts]
-        # Количество подряд идущих сообщений.
-        for dialog in dialogs:
-            i = 0
-            max_i = 0
-            for message in dialog.messages:
-                if message.user_id == user_id:
-                    i += 1
-                    if max_i < i:
-                        max_i = i
-                else:
-                    i = 0
-            additional_features[3].append(max_i)
+def count_in_a_row(mask):
+    count = 0
+    max_count = 0
+    for i in mask:
+        if i == 1:
+            count += 1
+            max_count = max(count, max_count)
+        else:
+            count = 0
+    return max_count
+
+
+def collect_all_features():
+    df = parse_dir()
+    data = pd.DataFrame()
+    data["userMessages"] = df["AliceMessages"].tolist() + df["BobMessages"].tolist()
+    data["userMessageMask"] = df["AliceMessageMask"].tolist() + df["BobMessageMask"].tolist()
+    data["userConcatenatedMessages"] = data["userMessages"].apply(lambda x: " ".join(x))
+    data["userIsBot"] = df["AliceIsBot"].tolist() + df["BobIsBot"].tolist()
+    data["userScores"] = df["AliceScore"].tolist() + df["BobScore"].tolist()
+
+    data["messageNum"] = data["userMessages"].apply(lambda x: len(x))
+    data["numChars"] = data["userMessages"].apply(lambda x: sum([len(msg) for msg in x]))
+    data["numWords"] = data["userMessages"].apply(lambda x: sum([len(msg.split()) for msg in x]))
+    data["avgChars"] = data["userMessages"].apply(lambda x: np.mean([0] + [len(msg) for msg in x]))
+    data["avgWords"] = data["userMessages"].apply(lambda x: np.mean([0] + [len(msg.split()) for msg in x]))
+    data["msgInARow"] = data["userMessageMask"].apply(lambda x: count_in_a_row(x))
 
     print("Bow step...")
-    bow_train_data, _ = bow(messages, [], language='en', stem=True,
-                            tokenizer=text_to_wordlist, use_tfidf=False, max_features=None,
-                            bow_ngrams=(1, 1))
+    bow_train_data, _ = bow(data["userConcatenatedMessages"].tolist(), [], language='en', stem=True,
+                            tokenizer=text_to_wordlist, use_tfidf=False, bow_ngrams=(1, 2))
+    data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
 
-    # print("POS step...")
-    # pos_train_data = []
-    # for text in messages:
-    #     pos_train_data.append(get_sentence_tags(text, "en"))
-    # pos_train_data, _ = bow(pos_train_data, [], language='en', stem=False, tokenizer=text_to_wordlist,
-    #                         use_tfidf=False, max_features=None, bow_ngrams=(1, 1))
-    data = hstack([bow_train_data, np.transpose(additional_features)])
+    print("POS step...")
+    pos_train_data = []
+    for text in data["userConcatenatedMessages"].tolist():
+        pos_train_data.append(get_sentence_tags(text, "en"))
+    pos_train_data, _ = bow(pos_train_data, [], language='en', stem=False, tokenizer=text_to_wordlist,
+                            use_tfidf=False, bow_ngrams=(1, 1))
+    data = pd.concat([data, pd.DataFrame(pos_train_data)], axis=1)
+    return data
+
+
+def answer_bot(data, train_indices, test_indices):
+    answers = np.array([int(i) for i in data["userIsBot"].tolist()])
+    data = data.drop(["userMessages", "userMessageMask", "userConcatenatedMessages", "userIsBot", "userScores"], axis=1)
+
+    l = data.shape[0]//2
+    pairs = {i: l+i if i < l else i-l for i in range(2*l)}
+    train_indices += [pairs[i] for i in train_indices]
+    test_indices += [pairs[i] for i in test_indices]
+    assert len(set(train_indices).intersection(set(test_indices))) == 0
+
     clf = LinearSVC(tol=0.1)
-    cv = ShuffleSplit(10, test_size=0.1, random_state=42)
-    cv_scores = cross_val_score(clf, data, answers, cv=cv, scoring=make_scorer(roc_auc_score))
-    print("CV: %0.3f (+/- %0.3f)" % (cv_scores.mean(), cv_scores.std() * 2))
-    clf.fit(data, answers)
-    pred = clf.predict(data)
-    ids = [dialog.dialog_id for dialog in dialogs]
-    submission = pd.DataFrame({'dialogId': ids,
-                               'Alice': pred[l:],
-                               'Bob': pred[:l]})
-    submission.to_csv(os.path.join(os.getcwd(), 'answerSVM.csv'), index=False)
+    clf.fit(data.loc[train_indices, :], answers[train_indices])
+    return clf.predict(data.loc[test_indices, :])
+
+
+def predict_regression(data, train_indices, test_indices):
+    bot_answers = answer_bot(data, train_indices, test_indices)
+    answers = np.array([int(i) for i in data["userScores"].tolist()])
+    l = data.shape[0] // 2
+    pairs = {i: l + i if i < l else i - l for i in range(2 * l)}
+    bot_scores_indices = [pairs[i] for i in data[data['userIsBot'] == True].index.tolist()]
+    data = data.drop(["userMessages", "userMessageMask", "userConcatenatedMessages", "userIsBot", "userScores"], axis=1)
+
+    train_indices += [pairs[i] for i in train_indices]
+    test_indices += [pairs[i] for i in test_indices]
+    assert len(set(train_indices).intersection(set(test_indices))) == 0
+    train_indices = list(set(train_indices).difference(set(bot_scores_indices)))
+
+    clf = Lasso()
+    clf.fit(data.loc[train_indices, :], answers[train_indices])
+    preds = clf.predict(data.loc[test_indices])
+    for i, is_bot in enumerate(bot_answers):
+        if is_bot == 1.0:
+            preds[test_indices.index(pairs[test_indices[i]])] = 0
+    return spearman(answers[test_indices], preds)
+
+scores = []
+features = collect_all_features()
+for i in range(10):
+    train_indices, test_indices, _, __ = train_test_split(range(features.shape[0]//2),
+                                                          range(features.shape[0]//2), test_size=0.1, random_state=i)
+    score = predict_regression(features, train_indices, test_indices)
+    scores.append(score)
+scores = np.array(scores)
+print("CV: %0.3f (+/- %0.3f)" % (scores.mean(), scores.std()))
