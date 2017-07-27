@@ -59,7 +59,7 @@ def get_sentence_tags(sentence, language):
 
 
 def bow(train_texts, test_texts, language='en', stem=False, tokenizer=text_to_wordlist, preprocessor=None,
-        use_tfidf=False, max_features=None, bow_ngrams=(1,2), analyzer='word'):
+        use_tfidf=False, max_features=None, bow_ngrams=(1, 1), analyzer='word'):
     train = copy.deepcopy(train_texts)
     test = copy.deepcopy(test_texts)
     if stem:
@@ -118,23 +118,19 @@ def collect_all_features():
     # data["RavgWords"] = data["userOpponentMessages"].apply(lambda x: np.mean([0] + [len(msg.split()) for msg in x]))
 
     print("BoW step...")
-    bow_train_data, _ = bow(data["userConcatenatedMessages"].tolist(), [], language='en', stem=False,
-                            tokenizer=text_to_wordlist, use_tfidf=False, bow_ngrams=(1, 1))
+    bow_train_data, _ = bow(data["userConcatenatedMessages"].tolist(), [], tokenizer=text_to_wordlist)
     data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
 
     print("RBoW step...")
-    bow_train_data, _ = bow(data["userOpponentConcatenatedMessages"].tolist(), [], language='en', stem=False,
-                            tokenizer=text_to_wordlist, use_tfidf=False, bow_ngrams=(1, 1))
+    bow_train_data, _ = bow(data["userOpponentConcatenatedMessages"].tolist(), [], tokenizer=text_to_wordlist)
     data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
 
     print("BoC step...")
-    bow_train_data, _ = bow(data["userConcatenatedMessages"].tolist(), [], language='en', stem=False,
-                            tokenizer=text_to_charlist, use_tfidf=False, bow_ngrams=(1, 1))
+    bow_train_data, _ = bow(data["userConcatenatedMessages"].tolist(), [], tokenizer=text_to_charlist)
     data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
 
     print("RBoC step...")
-    bow_train_data, _ = bow(data["userOpponentConcatenatedMessages"].tolist(), [], language='en', stem=False,
-                            tokenizer=text_to_charlist, use_tfidf=False, bow_ngrams=(1, 1))
+    bow_train_data, _ = bow(data["userOpponentConcatenatedMessages"].tolist(), [], tokenizer=text_to_charlist)
     data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
 
     # print("POS step...")
