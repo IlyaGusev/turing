@@ -14,6 +14,8 @@ from sklearn.linear_model import Lasso
 from scipy import stats
 from lightgbm import LGBMClassifier
 from sklearn.ensemble import BaggingClassifier
+from sklearn.metrics import roc_auc_score, make_scorer
+from sklearn.model_selection import ShuffleSplit, cross_val_score
 
 from parse_data import parse_dir, parse
 morph_ru = MorphAnalyzer()
@@ -150,6 +152,11 @@ def answer_bot(data, train_indices, test_indices):
     data = data.drop(["userMessages", "userMessageMask", "userConcatenatedMessages", "userIsBot", "dialogId",
                       "userScores", "userOpponentMessages", "userOpponentConcatenatedMessages"], axis=1)
     clf = LinearSVC(tol=0.1)
+    # cv = ShuffleSplit(10, test_size=0.1, random_state=42)
+    # cv_scores = cross_val_score(clf, data.loc[train_indices, :], answers[train_indices], cv=cv,
+    #                             scoring=make_scorer(roc_auc_score))
+    # print("CV is_bot: %0.3f (+/- %0.3f)" % (cv_scores.mean(), cv_scores.std() * 2))
+
     clf.fit(data.loc[train_indices, :], answers[train_indices])
     return clf.predict(data.loc[test_indices, :])
 
@@ -166,6 +173,10 @@ def predict_regression(data, train_indices, test_indices):
     data = data.drop(["userMessages", "userMessageMask", "userConcatenatedMessages", "dialogId",
                       "userIsBot", "userScores", "userOpponentMessages", "userOpponentConcatenatedMessages"], axis=1)
     clf = Lasso()
+    # cv = ShuffleSplit(10, test_size=0.1, random_state=42)
+    # cv_scores = cross_val_score(clf, data.loc[train_indices, :], answers[train_indices], cv=cv, scoring=make_scorer(spearman))
+    # print("CV regr: %0.3f (+/- %0.3f)" % (cv_scores.mean(), cv_scores.std() * 2))
+
     clf.fit(data.loc[train_indices, :], answers[train_indices])
     preds = clf.predict(data.loc[test_indices])
     for i, is_bot in enumerate(bot_answers):
@@ -207,13 +218,16 @@ def predict(train_filenames, test_filenames):
         submission = pd.DataFrame({'dialogId': features["dialogId"][test_indices[:len(test_indices)//2]],
                                    'Alice': alice_preds,
                                    'Bob': bob_preds})
+        submission = submission[["dialogId", "Alice", "Bob"]]
         submission.to_csv(os.path.join(os.getcwd(), 'submitions', 'answerRegr.csv'), index=False)
 
 
 def local_scorer(train_filename, submition):
     df = parse([train_filename])
     subm = pd.read_csv(submition, index_col="dialogId")
-    print(spearman(df["AliceScore"].tolist() + df["BobScore"].tolist(), subm.Alice.tolist() + subm.Bob.tolist()))
+    preds = np.array(subm.Alice.tolist() + subm.Bob.tolist())
+    answer = np.array(df["AliceScore"].tolist() + df["BobScore"].tolist())
+    print(spearman(answer, preds))
 
-predict(["data/train_20170724.json", "data/train_20170725.json"], ["data/test_20170726.json"])
-local_scorer("data/train_20170726.json", "submitions/answerRegr.csv")
+predict(["data/train_20170724.json", "data/train_20170725.json", "data/train_20170726.json"], [])
+# local_scorer("data/train_20170726.json", "submitions/answerRegr.csv")
