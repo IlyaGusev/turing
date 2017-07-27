@@ -118,12 +118,12 @@ def collect_all_features():
     # data["RavgWords"] = data["userOpponentMessages"].apply(lambda x: np.mean([0] + [len(msg.split()) for msg in x]))
 
     print("BoW step...")
-    bow_train_data, _ = bow(data["userConcatenatedMessages"].tolist(), [], language='en', stem=True,
+    bow_train_data, _ = bow(data["userConcatenatedMessages"].tolist(), [], language='en', stem=False,
                             tokenizer=text_to_wordlist, use_tfidf=False, bow_ngrams=(1, 1))
     data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
 
     print("RBoW step...")
-    bow_train_data, _ = bow(data["userOpponentConcatenatedMessages"].tolist(), [], language='en', stem=True,
+    bow_train_data, _ = bow(data["userOpponentConcatenatedMessages"].tolist(), [], language='en', stem=False,
                             tokenizer=text_to_wordlist, use_tfidf=False, bow_ngrams=(1, 1))
     data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
 
@@ -188,7 +188,7 @@ def predict_regression(data, train_indices, test_indices):
 
 scores = []
 features = collect_all_features()
-for i in range(10):
+for i in range(20):
     train_indices, test_indices, _, __ = train_test_split(range(features.shape[0]//2),
                                                           range(features.shape[0]//2), test_size=0.1, random_state=i)
     score = predict_regression(features, train_indices, test_indices)
