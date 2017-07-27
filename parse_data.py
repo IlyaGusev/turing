@@ -2,6 +2,7 @@ import json
 from collections import namedtuple
 import pandas as pd
 import os
+import numpy as np
 
 
 class Dialog:
@@ -29,7 +30,7 @@ class Dialog:
         return self.__str__()
 
 
-def parse(filenames, get_df=True):
+def parse(filenames, df=True):
     raw_dialogs = []
     for filename in filenames:
         with open(filename, "r", encoding="utf-8") as f:
@@ -50,25 +51,23 @@ def parse(filenames, get_df=True):
         for message in messages:
             dialog.add_message(message["userId"], message["text"])
         dialogs.append(dialog)
-    df = pd.DataFrame()
-    df["dialogId"] = [dialog.dialog_id for dialog in dialogs]
-    df["context"] = [dialog.context for dialog in dialogs]
-    df["messages"] = [[message.text for message in dialog.messages] for dialog in dialogs]
-    df["messageUsers"] = [[message.user_id for message in dialog.messages] for dialog in dialogs]
-    df["AliceMessages"] = [dialog.get_user_messages("Alice") for dialog in dialogs]
-    df["BobMessages"] = [dialog.get_user_messages("Bob") for dialog in dialogs]
-    df["AliceMessageMask"] = [dialog.get_message_mask("Alice") for dialog in dialogs]
-    df["BobMessageMask"] = [dialog.get_message_mask("Bob") for dialog in dialogs]
-    if dialogs[0].scores is not None:
-        for userId in dialogs[0].scores.keys():
-            df[userId+"Score"] = [dialog.scores[userId] for dialog in dialogs]
-    if dialogs[0].user_is_bot is not None:
-        for userId in dialogs[0].user_is_bot.keys():
-            df[userId+"IsBot"] = [dialog.user_is_bot[userId] for dialog in dialogs]
-    if get_df:
-        return df
+    data = pd.DataFrame()
+    data["dialogId"] = [dialog.dialog_id for dialog in dialogs]
+    data["context"] = [dialog.context for dialog in dialogs]
+    data["messages"] = [[message.text for message in dialog.messages] for dialog in dialogs]
+    data["messageUsers"] = [[message.user_id for message in dialog.messages] for dialog in dialogs]
+    data["AliceMessages"] = [dialog.get_user_messages("Alice") for dialog in dialogs]
+    data["BobMessages"] = [dialog.get_user_messages("Bob") for dialog in dialogs]
+    data["AliceMessageMask"] = [dialog.get_message_mask("Alice") for dialog in dialogs]
+    data["BobMessageMask"] = [dialog.get_message_mask("Bob") for dialog in dialogs]
+    data["AliceScore"] = [dialog.scores["Alice"] if dialog.scores is not None else np.NaN for dialog in dialogs]
+    data["BobScore"] = [dialog.scores["Bob"] if dialog.scores is not None else np.NaN for dialog in dialogs]
+    data["AliceIsBot"] = [int(dialog.user_is_bot["Alice"]) if dialog.user_is_bot is not None else np.NaN for dialog in dialogs]
+    data["BobIsBot"] = [int(dialog.user_is_bot["Bob"]) if dialog.user_is_bot is not None else np.NaN for dialog in dialogs]
+    if df:
+        return data
     return dialogs
 
 
 def parse_dir(dir_name="data", df=True):
-    return parse([os.path.join(dir_name, file_name) for file_name in os.listdir(dir_name)], get_df=df)
+    return parse([os.path.join(dir_name, file_name) for file_name in os.listdir(dir_name)], df=df)

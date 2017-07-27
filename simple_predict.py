@@ -2,6 +2,7 @@ import copy
 import re
 import pandas as pd
 import numpy as np
+import os
 
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from pymorphy2 import MorphAnalyzer
@@ -14,7 +15,7 @@ from scipy import stats
 from lightgbm import LGBMClassifier
 from sklearn.ensemble import BaggingClassifier
 
-from parse_data import parse_dir
+from parse_data import parse_dir, parse
 morph_ru = MorphAnalyzer()
 morph_en = SnowballStemmer("english")
 
@@ -93,9 +94,10 @@ def count_in_a_row(mask):
     return max_count
 
 
-def collect_all_features():
-    df = parse_dir()
+def collect_all_features(filenames):
+    df = parse(filenames)
     data = pd.DataFrame()
+    data["dialogId"] = df["dialogId"].tolist() + df["dialogId"].tolist()
     data["userMessages"] = df["AliceMessages"].tolist() + df["BobMessages"].tolist()
     data["userOpponentMessages"] = df["BobMessages"].tolist() + df["AliceMessages"].tolist()
     data["userMessageMask"] = df["AliceMessageMask"].tolist() + df["BobMessageMask"].tolist()
@@ -144,16 +146,9 @@ def collect_all_features():
 
 
 def answer_bot(data, train_indices, test_indices):
-    answers = np.array([int(i) for i in data["userIsBot"].tolist()])
-    data = data.drop(["userMessages", "userMessageMask", "userConcatenatedMessages", "userIsBot",
+    answers = np.array([int(i) if not np.isnan(i) else np.NaN for i in data["userIsBot"].tolist()])
+    data = data.drop(["userMessages", "userMessageMask", "userConcatenatedMessages", "userIsBot", "dialogId",
                       "userScores", "userOpponentMessages", "userOpponentConcatenatedMessages"], axis=1)
-
-    l = data.shape[0]//2
-    pairs = {i: l+i if i < l else i-l for i in range(2*l)}
-    train_indices += [pairs[i] for i in train_indices]
-    test_indices += [pairs[i] for i in test_indices]
-    assert len(set(train_indices).intersection(set(test_indices))) == 0
-
     clf = LinearSVC(tol=0.1)
     clf.fit(data.loc[train_indices, :], answers[train_indices])
     return clf.predict(data.loc[test_indices, :])
@@ -161,18 +156,15 @@ def answer_bot(data, train_indices, test_indices):
 
 def predict_regression(data, train_indices, test_indices):
     bot_answers = answer_bot(data, train_indices, test_indices)
-    answers = np.array([int(i) for i in data["userScores"].tolist()])
+    answers = np.array([int(i) if not np.isnan(i) else np.NaN for i in data["userScores"].tolist()])
+
     l = data.shape[0] // 2
     pairs = {i: l + i if i < l else i - l for i in range(2 * l)}
     bot_scores_indices = [pairs[i] for i in data[data['userIsBot'] == True].index.tolist()]
-    data = data.drop(["userMessages", "userMessageMask", "userConcatenatedMessages",
+    train_indices = copy.deepcopy(list(set(train_indices).difference(set(bot_scores_indices))))
+
+    data = data.drop(["userMessages", "userMessageMask", "userConcatenatedMessages", "dialogId",
                       "userIsBot", "userScores", "userOpponentMessages", "userOpponentConcatenatedMessages"], axis=1)
-
-    train_indices += [pairs[i] for i in train_indices]
-    test_indices += [pairs[i] for i in test_indices]
-    assert len(set(train_indices).intersection(set(test_indices))) == 0
-    train_indices = list(set(train_indices).difference(set(bot_scores_indices)))
-
     clf = Lasso()
     clf.fit(data.loc[train_indices, :], answers[train_indices])
     preds = clf.predict(data.loc[test_indices])
@@ -180,15 +172,48 @@ def predict_regression(data, train_indices, test_indices):
         if is_bot == 1.0:
             preds[test_indices.index(pairs[test_indices[i]])] = 0
     del data
-    return spearman(answers[test_indices], preds)
+    return preds
 
-scores = []
-features = collect_all_features()
-for i in range(20):
-    train_indices, test_indices, _, __ = train_test_split(range(features.shape[0]//2),
-                                                          range(features.shape[0]//2), test_size=0.1, random_state=i)
-    score = predict_regression(features, train_indices, test_indices)
-    print(score)
-    scores.append(score)
-scores = np.array(scores)
-print("CV: %0.3f (+/- %0.3f)" % (scores.mean(), scores.std()))
+
+def predict(train_filenames, test_filenames):
+    if len(test_filenames) == 0:
+        scores = []
+        features = collect_all_features(train_filenames)
+        for i in range(20):
+            train_indices, test_indices, _, __ = train_test_split(range(features.shape[0] // 2),
+                                                                  range(features.shape[0] // 2), test_size=0.1,
+                                                                  random_state=i)
+            l = features.shape[0] // 2
+            pairs = {i: l + i if i < l else i - l for i in range(2 * l)}
+            train_indices += [pairs[i] for i in train_indices]
+            test_indices += [pairs[i] for i in test_indices]
+            assert len(set(train_indices).intersection(set(test_indices))) == 0
+
+            answers = np.array([int(i) for i in features["userScores"].tolist()])[test_indices]
+            preds = predict_regression(features, train_indices, test_indices)
+
+            score = spearman(preds, answers)
+            print(score)
+            scores.append(score)
+        scores = np.array(scores)
+        print("CV: %0.3f (+/- %0.3f)" % (scores.mean(), scores.std()))
+    else:
+        features = collect_all_features(train_filenames+test_filenames)
+        train_indices = features["userScores"].index[features["userScores"].apply(lambda x: not np.isnan(x))].tolist()
+        test_indices = features["userScores"].index[features["userScores"].apply(np.isnan)].tolist()
+        preds = predict_regression(features, train_indices, test_indices).tolist()
+        alice_preds = preds[:len(preds)//2]
+        bob_preds = preds[len(preds)//2:]
+        submission = pd.DataFrame({'dialogId': features["dialogId"][test_indices[:len(test_indices)//2]],
+                                   'Alice': alice_preds,
+                                   'Bob': bob_preds})
+        submission.to_csv(os.path.join(os.getcwd(), 'submitions', 'answerRegr.csv'), index=False)
+
+
+def local_scorer(train_filename, submition):
+    df = parse([train_filename])
+    subm = pd.read_csv(submition, index_col="dialogId")
+    print(spearman(df["AliceScore"].tolist() + df["BobScore"].tolist(), subm.Alice.tolist() + subm.Bob.tolist()))
+
+predict(["data/train_20170724.json", "data/train_20170725.json"], ["data/test_20170726.json"])
+local_scorer("data/train_20170726.json", "submitions/answerRegr.csv")
