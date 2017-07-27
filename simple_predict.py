@@ -3,6 +3,7 @@ import re
 import pandas as pd
 import numpy as np
 import os
+import editdistance
 
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from pymorphy2 import MorphAnalyzer
@@ -12,8 +13,11 @@ from sklearn.svm import LinearSVC
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import Lasso
 from scipy import stats
+from nltk.tokenize import TweetTokenizer
 from lightgbm import LGBMClassifier
 from sklearn.ensemble import BaggingClassifier
+from sklearn.metrics import roc_auc_score, make_scorer
+from sklearn.model_selection import ShuffleSplit, cross_val_score
 
 from parse_data import parse_dir, parse
 morph_ru = MorphAnalyzer()
@@ -24,11 +28,23 @@ def spearman(a, b):
     return stats.spearmanr(a, b)[0]
 
 
+# def collect_vocab(messages):
+#     words = set()
+#     for message in messages:
+#         for word in text_to_wordlist(message):
+#             words.add(word)
+#     a = np.zeros((len(words), len(words)))
+#     words = list(words)
+#     for i in range(len(words)):
+#         for j in range(len(words)):
+#             a[i][j] = editdistance.eval(words[i], words[j])
+#             if a[i][j] == 1 and len(words[i]) > 4 and len(words[j]) > 4 and i != j:
+#                 print(words[i], words[j])
+
+
 def text_to_wordlist(sentence):
-    regexp = "[^а-яА-Яёa-zA-Z.,;!?:()><_]"
-    sentence = re.sub(regexp, " ", sentence)
-    result = sentence.lower().split()
-    return result
+    tokenizer = TweetTokenizer()
+    return tokenizer.tokenize(sentence)
 
 
 def text_to_charlist(sentence):
@@ -101,10 +117,12 @@ def collect_all_features(filenames):
     data["userMessages"] = df["AliceMessages"].tolist() + df["BobMessages"].tolist()
     data["userOpponentMessages"] = df["BobMessages"].tolist() + df["AliceMessages"].tolist()
     data["userMessageMask"] = df["AliceMessageMask"].tolist() + df["BobMessageMask"].tolist()
-    data["userConcatenatedMessages"] = data["userMessages"].apply(lambda x: " ".join(x))
-    data["userOpponentConcatenatedMessages"] = data["userOpponentMessages"].apply(lambda x: " ".join(x))
+    separator = "      "
+    data["userConcatenatedMessages"] = data["userMessages"].apply(lambda x: separator.join(x))
+    data["userOpponentConcatenatedMessages"] = data["userOpponentMessages"].apply(lambda x: separator.join(x))
     data["userIsBot"] = df["AliceIsBot"].tolist() + df["BobIsBot"].tolist()
     data["userScores"] = df["AliceScore"].tolist() + df["BobScore"].tolist()
+    # collect_vocab(data["userConcatenatedMessages"].tolist())
 
     data["messageNum"] = data["userMessages"].apply(lambda x: len(x))
     data["numChars"] = data["userMessages"].apply(lambda x: sum([len(msg) for msg in x]))
@@ -120,7 +138,7 @@ def collect_all_features(filenames):
     # data["RavgWords"] = data["userOpponentMessages"].apply(lambda x: np.mean([0] + [len(msg.split()) for msg in x]))
 
     print("BoW step...")
-    bow_train_data, _ = bow(data["userConcatenatedMessages"].tolist(), [], tokenizer=text_to_wordlist)
+    bow_train_data, _ = bow(data["userConcatenatedMessages"].tolist(), [], tokenizer=text_to_wordlist, bow_ngrams=(1, 1))
     data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
 
     # print("RBoW step...")
@@ -128,7 +146,7 @@ def collect_all_features(filenames):
     # data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
 
     print("BoC step...")
-    bow_train_data, _ = bow(data["userConcatenatedMessages"].tolist(), [], tokenizer=text_to_charlist)
+    bow_train_data, _ = bow(data["userConcatenatedMessages"].tolist(), [], tokenizer=text_to_charlist, bow_ngrams=(1, 3))
     data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
 
     # print("RBoC step...")
@@ -150,6 +168,11 @@ def answer_bot(data, train_indices, test_indices):
     data = data.drop(["userMessages", "userMessageMask", "userConcatenatedMessages", "userIsBot", "dialogId",
                       "userScores", "userOpponentMessages", "userOpponentConcatenatedMessages"], axis=1)
     clf = LinearSVC(tol=0.1)
+    # cv = ShuffleSplit(10, test_size=0.1, random_state=42)
+    # cv_scores = cross_val_score(clf, data.loc[train_indices, :], answers[train_indices], cv=cv,
+    #                             scoring=make_scorer(roc_auc_score))
+    # print("CV is_bot: %0.3f (+/- %0.3f)" % (cv_scores.mean(), cv_scores.std() * 2))
+
     clf.fit(data.loc[train_indices, :], answers[train_indices])
     return clf.predict(data.loc[test_indices, :])
 
@@ -166,6 +189,10 @@ def predict_regression(data, train_indices, test_indices):
     data = data.drop(["userMessages", "userMessageMask", "userConcatenatedMessages", "dialogId",
                       "userIsBot", "userScores", "userOpponentMessages", "userOpponentConcatenatedMessages"], axis=1)
     clf = Lasso()
+    # cv = ShuffleSplit(10, test_size=0.1, random_state=42)
+    # cv_scores = cross_val_score(clf, data.loc[train_indices, :], answers[train_indices], cv=cv, scoring=make_scorer(spearman))
+    # print("CV regr: %0.3f (+/- %0.3f)" % (cv_scores.mean(), cv_scores.std() * 2))
+
     clf.fit(data.loc[train_indices, :], answers[train_indices])
     preds = clf.predict(data.loc[test_indices])
     for i, is_bot in enumerate(bot_answers):
@@ -207,13 +234,16 @@ def predict(train_filenames, test_filenames):
         submission = pd.DataFrame({'dialogId': features["dialogId"][test_indices[:len(test_indices)//2]],
                                    'Alice': alice_preds,
                                    'Bob': bob_preds})
+        submission = submission[["dialogId", "Alice", "Bob"]]
         submission.to_csv(os.path.join(os.getcwd(), 'submitions', 'answerRegr.csv'), index=False)
 
 
 def local_scorer(train_filename, submition):
     df = parse([train_filename])
     subm = pd.read_csv(submition, index_col="dialogId")
-    print(spearman(df["AliceScore"].tolist() + df["BobScore"].tolist(), subm.Alice.tolist() + subm.Bob.tolist()))
+    preds = np.array(subm.Alice.tolist() + subm.Bob.tolist())
+    answer = np.array(df["AliceScore"].tolist() + df["BobScore"].tolist())
+    print(spearman(answer, preds))
 
-predict(["data/train_20170724.json", "data/train_20170725.json"], ["data/test_20170726.json"])
-local_scorer("data/train_20170726.json", "submitions/answerRegr.csv")
+predict(["data/train_20170724.json", "data/train_20170725.json", "data/train_20170726.json"], [])
+# local_scorer("data/train_20170726.json", "submitions/answerRegr.csv")
