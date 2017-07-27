@@ -100,7 +100,7 @@ def collect_all_features():
     data["userOpponentMessages"] = df["BobMessages"].tolist() + df["AliceMessages"].tolist()
     data["userMessageMask"] = df["AliceMessageMask"].tolist() + df["BobMessageMask"].tolist()
     data["userConcatenatedMessages"] = data["userMessages"].apply(lambda x: " ".join(x))
-    data["userOpponentConcatenatedMessages"] = data["userMessages"].apply(lambda x: " ".join(x))
+    data["userOpponentConcatenatedMessages"] = data["userOpponentMessages"].apply(lambda x: " ".join(x))
     data["userIsBot"] = df["AliceIsBot"].tolist() + df["BobIsBot"].tolist()
     data["userScores"] = df["AliceScore"].tolist() + df["BobScore"].tolist()
 
@@ -121,17 +121,17 @@ def collect_all_features():
     bow_train_data, _ = bow(data["userConcatenatedMessages"].tolist(), [], tokenizer=text_to_wordlist)
     data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
 
-    print("RBoW step...")
-    bow_train_data, _ = bow(data["userOpponentConcatenatedMessages"].tolist(), [], tokenizer=text_to_wordlist)
-    data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
+    # print("RBoW step...")
+    # bow_train_data, _ = bow(data["userOpponentConcatenatedMessages"].tolist(), [], tokenizer=text_to_wordlist)
+    # data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
 
     print("BoC step...")
     bow_train_data, _ = bow(data["userConcatenatedMessages"].tolist(), [], tokenizer=text_to_charlist)
     data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
 
-    print("RBoC step...")
-    bow_train_data, _ = bow(data["userOpponentConcatenatedMessages"].tolist(), [], tokenizer=text_to_charlist)
-    data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
+    # print("RBoC step...")
+    # bow_train_data, _ = bow(data["userOpponentConcatenatedMessages"].tolist(), [], tokenizer=text_to_charlist)
+    # data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
 
     # print("POS step...")
     # pos_train_data = []
