@@ -1,119 +1,33 @@
+import os
+import gc
+import itertools
 import copy
-import re
+
 import pandas as pd
 import numpy as np
-import os
-import editdistance
-
-from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
-from pymorphy2 import MorphAnalyzer
-from nltk.stem.snowball import SnowballStemmer
-from nltk import pos_tag
-from sklearn.svm import LinearSVC
-from sklearn.model_selection import train_test_split
-from sklearn.linear_model import Lasso
+import xgboost as xgb
 from scipy import stats
-from nltk.tokenize import TweetTokenizer
-from lightgbm import LGBMClassifier
-from sklearn.ensemble import BaggingClassifier
-from sklearn.metrics import roc_auc_score, make_scorer
-from sklearn.model_selection import ShuffleSplit, cross_val_score
 
-from parse_data import parse_dir, parse
-morph_ru = MorphAnalyzer()
-morph_en = SnowballStemmer("english")
+from sklearn.svm import LinearSVC
+from sklearn.model_selection import train_test_split, ShuffleSplit, cross_val_score
+from sklearn.linear_model import Lasso
+from sklearn.metrics import roc_auc_score, make_scorer
+
+from lightgbm import LGBMClassifier, LGBMRegressor
+
+from util import bow, text_to_wordlist, text_to_charlist
+from parse_data import parse
 
 
 def spearman(a, b):
     return stats.spearmanr(a, b)[0]
 
 
-# def collect_vocab(messages):
-#     words = set()
-#     for message in messages:
-#         for word in text_to_wordlist(message):
-#             words.add(word)
-#     a = np.zeros((len(words), len(words)))
-#     words = list(words)
-#     for i in range(len(words)):
-#         for j in range(len(words)):
-#             a[i][j] = editdistance.eval(words[i], words[j])
-#             if a[i][j] == 1 and len(words[i]) > 4 and len(words[j]) > 4 and i != j:
-#                 print(words[i], words[j])
-
-
-def text_to_wordlist(sentence):
-    tokenizer = TweetTokenizer()
-    return tokenizer.tokenize(sentence)
-
-
-def text_to_charlist(sentence):
-    return list(sentence)
-
-
-def stem_sentence(sentence, language):
-    words = text_to_wordlist(sentence)
-    for j in range(len(words)):
-        if language == 'ru':
-            words[j] = morph_ru.parse(words[j])[0].normal_form
-        if language == 'en':
-            words[j] = morph_en.stem(words[j])
-    return " ".join(words)
-
-
-def get_sentence_tags(sentence, language):
-    words = text_to_wordlist(sentence)
-    tags = []
-    if language == 'en':
-        if len(words) != 0:
-            tags = [i[1] for i in pos_tag(words)]
-    if language == 'ru':
-        for j in range(len(words)):
-            pos = morph_ru.parse(words[j])[0].tag.POS
-            if pos is not None:
-                tags.append(pos)
-    return " ".join(tags)
-
-
-def bow(train_texts, test_texts, language='en', stem=False, tokenizer=text_to_wordlist, preprocessor=None,
-        use_tfidf=False, max_features=None, bow_ngrams=(1, 1), analyzer='word'):
-    train = copy.deepcopy(train_texts)
-    test = copy.deepcopy(test_texts)
-    if stem:
-        for i in range(len(train)):
-            train[i] = stem_sentence(train[i], language)
-        for i in range(len(test)):
-            test[i] = stem_sentence(test[i], language)
-
-    if use_tfidf:
-        vectorizer = TfidfVectorizer(analyzer=analyzer, ngram_range=bow_ngrams, tokenizer=tokenizer,
-                                     preprocessor=preprocessor, max_features=max_features)
-    else:
-        vectorizer = CountVectorizer(analyzer=analyzer, ngram_range=bow_ngrams, tokenizer=tokenizer,
-                                     preprocessor=preprocessor, max_features=max_features)
-    data = train+test
-    data = vectorizer.fit_transform(data)
-    train_data = data[:len(train)]
-    test_data = data[len(train):]
-    return train_data.todense(), test_data.todense()
-
-
-def count_in_a_row(mask):
-    count = 0
-    max_count = 0
-    for i in mask:
-        if i == 1:
-            count += 1
-            max_count = max(count, max_count)
-        else:
-            count = 0
-    return max_count
-
-
 def collect_all_features(filenames):
     df = parse(filenames)
     data = pd.DataFrame()
     data["dialogId"] = df["dialogId"].tolist() + df["dialogId"].tolist()
+    data["context"] = df["context"].tolist() + df["context"].tolist()
     data["userMessages"] = df["AliceMessages"].tolist() + df["BobMessages"].tolist()
     data["userOpponentMessages"] = df["BobMessages"].tolist() + df["AliceMessages"].tolist()
     data["userMessageMask"] = df["AliceMessageMask"].tolist() + df["BobMessageMask"].tolist()
@@ -122,59 +36,108 @@ def collect_all_features(filenames):
     data["userOpponentConcatenatedMessages"] = data["userOpponentMessages"].apply(lambda x: separator.join(x))
     data["userIsBot"] = df["AliceIsBot"].tolist() + df["BobIsBot"].tolist()
     data["userScores"] = df["AliceScore"].tolist() + df["BobScore"].tolist()
-    # collect_vocab(data["userConcatenatedMessages"].tolist())
 
-    data["messageNum"] = data["userMessages"].apply(lambda x: len(x))
-    data["numChars"] = data["userMessages"].apply(lambda x: sum([len(msg) for msg in x]))
-    data["numWords"] = data["userMessages"].apply(lambda x: sum([len(msg.split()) for msg in x]))
-    data["avgChars"] = data["userMessages"].apply(lambda x: np.mean([0] + [len(msg) for msg in x]))
-    data["avgWords"] = data["userMessages"].apply(lambda x: np.mean([0] + [len(msg.split()) for msg in x]))
-    data["msgInARow"] = data["userMessageMask"].apply(lambda x: count_in_a_row(x))
+    hand_crafted_enable = True
+    bow_enable = True
+    boc_enable = True
+    rhand_crafted_enable = False
+    rbow_enable = False
+    rboc_enable = False
+    custom_enable = True
+    if hand_crafted_enable:
+        data["messageNum"] = data["userMessages"].apply(lambda x: len(x))
+        data["numChars"] = data["userMessages"].apply(lambda x: sum([len(msg) for msg in x]))
+        data["numWords"] = data["userMessages"].apply(lambda x: sum([len(msg.split()) for msg in x]))
+        data["avgChars"] = data["userMessages"].apply(lambda x: np.mean([0] + [len(msg) for msg in x]))
+        data["avgWords"] = data["userMessages"].apply(lambda x: np.mean([0] + [len(msg.split()) for msg in x]))
+        if custom_enable:
+            with open("words.txt") as wordfile:
+                system_words = set(x.strip().lower() for x in wordfile.readlines())
+            masks = data["userMessageMask"].tolist()
+            data["msgInARow"] = [max([0] + [len(list(x)) for x in (g for k, g in itertools.groupby(mask) if k == 1)])
+                                 for mask in masks]
+            not_dict_word_count = [sum([1 for word in text_to_wordlist(msg) if word not in system_words])
+                                   for msg in data["userConcatenatedMessages"].tolist()]
+            len_msg = [len(text_to_wordlist(msg)) for msg in data["userConcatenatedMessages"].tolist()]
+            data["notDictWordCount"] = not_dict_word_count
+            data["notDictWordCountPart"] = [float(count) / (1 + len_msg[i]) for i, count in enumerate(not_dict_word_count)]
+            context_word_count = [sum([1 for word in text_to_wordlist(text) if word in data["context"].tolist()[i]])
+                                  for i, text in enumerate(data["userConcatenatedMessages"].tolist())]
+            data["wordInContext"] = context_word_count
+            data["wordInContextPart"] = [float(count) / (1 + len_msg[i]) for i, count in enumerate(context_word_count)]
 
-    # data["RmessageNum"] = data["userOpponentMessages"].apply(lambda x: len(x))
-    # data["RnumChars"] = data["userOpponentMessages"].apply(lambda x: sum([len(msg) for msg in x]))
-    # data["RnumWords"] = data["userOpponentMessages"].apply(lambda x: sum([len(msg.split()) for msg in x]))
-    # data["RavgChars"] = data["userOpponentMessages"].apply(lambda x: np.mean([0] + [len(msg) for msg in x]))
-    # data["RavgWords"] = data["userOpponentMessages"].apply(lambda x: np.mean([0] + [len(msg.split()) for msg in x]))
+    if rhand_crafted_enable:
+        data["RmessageNum"] = data["userOpponentMessages"].apply(lambda x: len(x))
+        data["RnumChars"] = data["userOpponentMessages"].apply(lambda x: sum([len(msg) for msg in x]))
+        data["RnumWords"] = data["userOpponentMessages"].apply(lambda x: sum([len(msg.split()) for msg in x]))
+        data["RavgChars"] = data["userOpponentMessages"].apply(lambda x: np.mean([0] + [len(msg) for msg in x]))
+        data["RavgWords"] = data["userOpponentMessages"].apply(lambda x: np.mean([0] + [len(msg.split()) for msg in x]))
 
-    print("BoW step...")
-    bow_train_data, _ = bow(data["userConcatenatedMessages"].tolist(), [], tokenizer=text_to_wordlist, bow_ngrams=(1, 1))
-    data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
+    if bow_enable:
+        print("BoW step...")
+        bow_train_data, _ = bow(data["userConcatenatedMessages"].tolist(), [], tokenizer=text_to_wordlist, bow_ngrams=(1, 2))
+        data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
 
-    # print("RBoW step...")
-    # bow_train_data, _ = bow(data["userOpponentConcatenatedMessages"].tolist(), [], tokenizer=text_to_wordlist)
-    # data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
+    if rbow_enable:
+        print("RBoW step...")
+        bow_train_data, _ = bow(data["userOpponentConcatenatedMessages"].tolist(), [], tokenizer=text_to_wordlist)
+        data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
 
-    print("BoC step...")
-    bow_train_data, _ = bow(data["userConcatenatedMessages"].tolist(), [], tokenizer=text_to_charlist, bow_ngrams=(1, 3))
-    data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
+    if boc_enable:
+        print("BoC step...")
+        bow_train_data, _ = bow(data["userConcatenatedMessages"].tolist(), [], tokenizer=text_to_charlist, bow_ngrams=(1, 3))
+        data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
 
-    # print("RBoC step...")
-    # bow_train_data, _ = bow(data["userOpponentConcatenatedMessages"].tolist(), [], tokenizer=text_to_charlist)
-    # data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
-
-    # print("POS step...")
-    # pos_train_data = []
-    # for text in data["userConcatenatedMessages"].tolist():
-    #     pos_train_data.append(get_sentence_tags(text, "en"))
-    # pos_train_data, _ = bow(pos_train_data, [], language='en', stem=False, tokenizer=text_to_wordlist,
-    #                         use_tfidf=False, bow_ngrams=(1, 1))
-    # data = pd.concat([data, pd.DataFrame(pos_train_data)], axis=1)
+    if rboc_enable:
+        print("RBoC step...")
+        bow_train_data, _ = bow(data["userOpponentConcatenatedMessages"].tolist(), [], tokenizer=text_to_charlist)
+        data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
     return data
 
 
 def answer_bot(data, train_indices, test_indices):
     answers = np.array([int(i) if not np.isnan(i) else np.NaN for i in data["userIsBot"].tolist()])
-    data = data.drop(["userMessages", "userMessageMask", "userConcatenatedMessages", "userIsBot", "dialogId",
+    data = data.drop(["userMessages", "userMessageMask", "userConcatenatedMessages", "userIsBot", "dialogId", "context",
                       "userScores", "userOpponentMessages", "userOpponentConcatenatedMessages"], axis=1)
-    clf = LinearSVC(tol=0.1)
-    # cv = ShuffleSplit(10, test_size=0.1, random_state=42)
-    # cv_scores = cross_val_score(clf, data.loc[train_indices, :], answers[train_indices], cv=cv,
-    #                             scoring=make_scorer(roc_auc_score))
-    # print("CV is_bot: %0.3f (+/- %0.3f)" % (cv_scores.mean(), cv_scores.std() * 2))
+    data.columns = [i for i in range(len(data.columns))]
 
-    clf.fit(data.loc[train_indices, :], answers[train_indices])
-    return clf.predict(data.loc[test_indices, :])
+    xgb_enable = True
+    svm_enable = False
+    lgbm_enable = False
+    if xgb_enable:
+        params = {}
+        params['objective'] = 'binary:logistic'
+        params['eval_metric'] = 'auc'
+        params['eta'] = 0.02
+        params['max_depth'] = 7
+        params['subsample'] = 0.6
+        params['base_score'] = 0.2
+        params['silent'] = 1
+        rounds = 500
+        d_train = xgb.DMatrix(data.loc[train_indices, :], label=answers[train_indices])
+        d_test = xgb.DMatrix(data.loc[test_indices, :])
+        watchlist = [(d_train, 'train'),]
+        clf = xgb.train(params, d_train, rounds, watchlist, early_stopping_rounds=50, verbose_eval=50)
+        preds = [0 if i < 0.5 else 1 for i in clf.predict(d_test)]
+
+    if lgbm_enable or svm_enable:
+        if lgbm_enable:
+            clf = LGBMClassifier(n_estimators=100, num_leaves=1000)
+        if svm_enable:
+            clf = LinearSVC(tol=0.1)
+        clf.fit(data.loc[train_indices, :], answers[train_indices])
+        preds = clf.predict(data.loc[test_indices, :])
+
+    run_cv = False
+    if run_cv:
+        cv = ShuffleSplit(10, test_size=0.1, random_state=42)
+        cv_scores = cross_val_score(clf, data.loc[train_indices, :], answers[train_indices], cv=cv,
+                                    scoring=make_scorer(roc_auc_score))
+        print("CV is_bot: %0.3f (+/- %0.3f)" % (cv_scores.mean(), cv_scores.std() * 2))
+
+    del data
+    gc.collect()
+    return preds
 
 
 def predict_regression(data, train_indices, test_indices):
@@ -186,12 +149,20 @@ def predict_regression(data, train_indices, test_indices):
     bot_scores_indices = [pairs[i] for i in data[data['userIsBot'] == True].index.tolist()]
     train_indices = copy.deepcopy(list(set(train_indices).difference(set(bot_scores_indices))))
 
-    data = data.drop(["userMessages", "userMessageMask", "userConcatenatedMessages", "dialogId",
+    data = data.drop(["userMessages", "userMessageMask", "userConcatenatedMessages", "dialogId", "context",
                       "userIsBot", "userScores", "userOpponentMessages", "userOpponentConcatenatedMessages"], axis=1)
-    clf = Lasso()
-    # cv = ShuffleSplit(10, test_size=0.1, random_state=42)
-    # cv_scores = cross_val_score(clf, data.loc[train_indices, :], answers[train_indices], cv=cv, scoring=make_scorer(spearman))
-    # print("CV regr: %0.3f (+/- %0.3f)" % (cv_scores.mean(), cv_scores.std() * 2))
+    lasso_enable = False
+    lgbm_enable = True
+    if lasso_enable:
+        clf = Lasso()
+    if lgbm_enable:
+        clf = LGBMRegressor()
+    run_cv = False
+    if run_cv:
+        cv = ShuffleSplit(10, test_size=0.1, random_state=42)
+        cv_scores = cross_val_score(clf, data.loc[train_indices, :], answers[train_indices], cv=cv,
+                                    scoring=make_scorer(spearman))
+        print("CV regr: %0.3f (+/- %0.3f)" % (cv_scores.mean(), cv_scores.std() * 2))
 
     clf.fit(data.loc[train_indices, :], answers[train_indices])
     preds = clf.predict(data.loc[test_indices])
@@ -199,11 +170,13 @@ def predict_regression(data, train_indices, test_indices):
         if is_bot == 1.0:
             preds[test_indices.index(pairs[test_indices[i]])] = 0
     del data
+    gc.collect()
     return preds
 
 
 def predict(train_filenames, test_filenames):
     if len(test_filenames) == 0:
+        print("Validation")
         scores = []
         features = collect_all_features(train_filenames)
         for i in range(20):
@@ -220,11 +193,13 @@ def predict(train_filenames, test_filenames):
             preds = predict_regression(features, train_indices, test_indices)
 
             score = spearman(preds, answers)
-            print(score)
             scores.append(score)
+            print("Split: ", i, "Score: ", score, "Mean: ", np.mean(scores), "Median: ",
+                  np.median(scores), "Std: ", np.std(scores))
         scores = np.array(scores)
         print("CV: %0.3f (+/- %0.3f)" % (scores.mean(), scores.std()))
     else:
+        print("Prediction")
         features = collect_all_features(train_filenames+test_filenames)
         train_indices = features["userScores"].index[features["userScores"].apply(lambda x: not np.isnan(x))].tolist()
         test_indices = features["userScores"].index[features["userScores"].apply(np.isnan)].tolist()
@@ -235,7 +210,7 @@ def predict(train_filenames, test_filenames):
                                    'Alice': alice_preds,
                                    'Bob': bob_preds})
         submission = submission[["dialogId", "Alice", "Bob"]]
-        submission.to_csv(os.path.join(os.getcwd(), 'submitions', 'answerRegr.csv'), index=False)
+        submission.to_csv(os.path.join(os.getcwd(), 'data', 'answer.csv'), index=False)
 
 
 def local_scorer(train_filename, submition):
@@ -245,5 +220,28 @@ def local_scorer(train_filename, submition):
     answer = np.array(df["AliceScore"].tolist() + df["BobScore"].tolist())
     print(spearman(answer, preds))
 
-predict(["data/train_20170724.json", "data/train_20170725.json", "data/train_20170726.json"], [])
-# local_scorer("data/train_20170726.json", "submitions/answerRegr.csv")
+
+def avg_blending(filenames):
+    dfs = []
+    for filename in filenames:
+        dfs.append(pd.read_csv(filename, header=0))
+    df = pd.DataFrame()
+    df["dialogId"] = dfs[0]["dialogId"]
+    users = ["Alice", "Bob"]
+    for user in users:
+        df[user] = np.zeros((dfs[0].shape[0]))
+        for data in dfs:
+            df[user] = df[user] + data[user]
+        df[user] = df[user].apply(lambda x: x/len(dfs))
+    df = df[["dialogId", "Alice", "Bob"]]
+    df.to_csv(os.path.join('submitions', 'avg.csv'), index=False)
+
+if __name__ == "__main__":
+    train_dir = "data/train"
+    test_dir = "data/test"
+
+    def get_all_files_in_dir(dir_name):
+        return [os.path.join(dir_name, filename) for filename in os.listdir(dir_name)]
+    predict(get_all_files_in_dir(train_dir), get_all_files_in_dir(test_dir))
+    # local_scorer("data/train_20170726.json", "submitions/answerRegr.csv")
+    # avg_blending(["submitions/answer27-0.6.csv", "submitions/Max-answer27-0.5.csv", "submitions/Nik-answer27-0.33.csv"])
