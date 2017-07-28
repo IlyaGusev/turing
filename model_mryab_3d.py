@@ -1,27 +1,20 @@
-from scipy.stats import spearmanr
-
 import pandas as pd
 import numpy as np
 import os
 
-from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
-
-from sklearn.ensemble import BaggingClassifier
-from sklearn.model_selection import cross_val_score, GridSearchCV, KFold
-from sklearn.naive_bayes import GaussianNB
-from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
-from sklearn.ensemble import VotingClassifier
-from sklearn.svm import LinearSVC
-from sklearn.ensemble import GradientBoostingClassifier
-
-import lightgbm as lgbm
-from lightgbm.sklearn import LGBMRegressor, LGBMClassifier
+from sklearn.feature_extraction.text import CountVectorizer
 import string
 from nltk.tokenize import TreebankWordTokenizer
 
 import itertools
 from nltk.corpus import stopwords
 import nltk
+
+from mlxtend.regressor import StackingCVRegressor
+from xgboost import XGBRegressor
+from lightgbm import LGBMRegressor
+
+import pickle
 
 np.random.seed(1337)
 
@@ -73,28 +66,18 @@ def process_data(path, exclude=[], train=True, vectorizers=None):
             preproc = lambda text: preprocess(text, *preproc_mode)
 
             if vectorizers:
-                tfidf_thread, tfidf_context, count_thread, count_context, tfidf_char_thread, count_char_thread = \
-                    vectorizers["{}_{}_{}".format(*preproc_mode)]
+                count_thread, count_context, count_char_thread = vectorizers["{}_{}_{}".format(*preproc_mode)]
             else:
-                tfidf_thread = TfidfVectorizer(analyzer='word', ngram_range=(1, 2), max_features=4000,
-                                               tokenizer=TreebankWordTokenizer().tokenize)
-                tfidf_thread.fit(data["thread_raw"])
-                tfidf_context = TfidfVectorizer(analyzer='word', ngram_range=(1, 2), max_features=4000,
-                                                tokenizer=TreebankWordTokenizer().tokenize)
-                tfidf_context.fit(data["context"])
                 count_thread = CountVectorizer(analyzer='word', ngram_range=(1, 2), max_features=4000,
                                                tokenizer=TreebankWordTokenizer().tokenize)
                 count_thread.fit(data["thread_raw"])
                 count_context = CountVectorizer(analyzer='word', ngram_range=(1, 2), max_features=4000,
                                                 tokenizer=TreebankWordTokenizer().tokenize)
                 count_context.fit(data["context"])
-                tfidf_char_thread = TfidfVectorizer(analyzer='char', ngram_range=(1, 4), max_features=4000)
-                tfidf_char_thread.fit(data["thread_raw"])
                 count_char_thread = CountVectorizer(analyzer='char', ngram_range=(1, 4), max_features=4000)
                 count_char_thread.fit(data["thread_raw"])
 
-                new_vectorizers["{}_{}_{}".format(*preproc_mode)] = (
-                    tfidf_thread, tfidf_context, count_thread, count_context, tfidf_char_thread, count_char_thread)
+                new_vectorizers["{}_{}_{}".format(*preproc_mode)] = (count_thread, count_context, count_char_thread)
 
             def get_speaker(speaker):
                 return lambda row: [preproc(x) for x in np.array(row['thread'])[np.array(row['speaker']) == speaker]]
@@ -113,20 +96,6 @@ def process_data(path, exclude=[], train=True, vectorizers=None):
 
             data["start_A_{}_{}_{}".format(*preproc_mode)] = data.apply(get_first("A"), axis=1)
             data["start_B_{}_{}_{}".format(*preproc_mode)] = data.apply(get_first("B"), axis=1)
-
-            data["tfidf_all_{}_{}_{}".format(*preproc_mode)] = tfidf_thread.transform(
-                data["thread_raw"]).toarray().tolist()
-            data["tfidf_A_{}_{}_{}".format(*preproc_mode)] = tfidf_thread.transform(
-                data["thread_joined_A_{}_{}_{}".format(*preproc_mode)]).toarray().tolist()
-            data["tfidf_B_{}_{}_{}".format(*preproc_mode)] = tfidf_thread.transform(
-                data["thread_joined_B_{}_{}_{}".format(*preproc_mode)]).toarray().tolist()
-            data["tfidf_char_A_{}_{}_{}".format(*preproc_mode)] = tfidf_char_thread.transform(
-                data["thread_joined_A_{}_{}_{}".format(*preproc_mode)]).toarray().tolist()
-            data["tfidf_char_B_{}_{}_{}".format(*preproc_mode)] = tfidf_char_thread.transform(
-                data["thread_joined_B_{}_{}_{}".format(*preproc_mode)]).toarray().tolist()
-
-            data["tfidf_context_{}_{}_{}".format(*preproc_mode)] = tfidf_context.transform(
-                data["context"]).toarray().tolist()
 
             data["counts_all_{}_{}_{}".format(*preproc_mode)] = count_thread.transform(
                 data["thread_raw"]).toarray().tolist()
@@ -219,14 +188,6 @@ def process_data(path, exclude=[], train=True, vectorizers=None):
     return data, vectorizers
 
 
-from mlxtend.regressor import StackingCVRegressor
-from sklearn.model_selection import KFold
-from xgboost import XGBRegressor
-from lightgbm import LGBMRegressor
-from sklearn.ensemble import GradientBoostingRegressor, ExtraTreesRegressor
-from sklearn.svm import SVR
-import pickle
-
 with open("models_mryab/vectorizers.pkl", "rb") as f:
     vectorizers = pickle.load(f)
 
@@ -235,10 +196,6 @@ feat_templates = [
     'counts_A_{}_{}_{}',
     'counts_B_{}_{}_{}',
     # 'counts_context_{}_{}_{}',
-    # 'tfidf_all_{}_{}_{}',
-    # 'tfidf_A_{}_{}_{}',
-    # 'tfidf_B_{}_{}_{}',
-    # 'tfidf_context_{}_{}_{}',
     'f_max_run_A_{}_{}_{}',
     'f_max_run_B_{}_{}_{}',
     'f_min_run_A_{}_{}_{}',

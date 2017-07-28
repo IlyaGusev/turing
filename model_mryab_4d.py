@@ -1,27 +1,20 @@
-from scipy.stats import spearmanr
-
 import pandas as pd
 import numpy as np
 import os
 
 from sklearn.feature_extraction.text import CountVectorizer
-
-from sklearn.ensemble import BaggingClassifier
-from sklearn.model_selection import cross_val_score, GridSearchCV, KFold
-from sklearn.naive_bayes import GaussianNB
-from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
-from sklearn.ensemble import VotingClassifier
-from sklearn.svm import LinearSVC
-from sklearn.ensemble import GradientBoostingClassifier
-
-import lightgbm as lgbm
-from lightgbm.sklearn import LGBMRegressor, LGBMClassifier
 import string
 from nltk.tokenize import TreebankWordTokenizer
 
 import itertools
 from nltk.corpus import stopwords
 import nltk
+
+from mlxtend.regressor import StackingCVRegressor
+from xgboost import XGBRegressor
+from lightgbm import LGBMRegressor
+
+import pickle
 
 np.random.seed(1337)
 
@@ -194,14 +187,6 @@ def process_data(path, exclude=[], train=True, vectorizers=None):
 
     return data, vectorizers
 
-
-from mlxtend.regressor import StackingCVRegressor
-from sklearn.model_selection import KFold
-from xgboost import XGBRegressor
-from lightgbm import LGBMRegressor
-from sklearn.ensemble import GradientBoostingRegressor, ExtraTreesRegressor
-from sklearn.svm import SVR
-import pickle
 
 with open("models_mryab/vectorizers.pkl", "rb") as f:
     vectorizers = pickle.load(f)
