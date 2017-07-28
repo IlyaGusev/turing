@@ -270,10 +270,10 @@ test, *_ = process_data("data/test/", train=False, vectorizers=vectorizers)
 T = ((test[features]).values)
 T = np.stack([np.concatenate(T[i]) for i in range(T.shape[0])])
 
-with open("mryab_stregr_a_3.pkl", "rb") as file:
+with open("models_mryab/mryab_stregr_a_3.pkl", "rb") as file:
     stregr_a = pickle.load(file)
 
-with open("mryab_stregr_a_3.pkl", "rb") as file:
+with open("models_mryab/mryab_stregr_a_3.pkl", "rb") as file:
     stregr_b = pickle.load(file)
 
 pred_a = stregr_a.predict(T)
