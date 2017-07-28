@@ -1,17 +1,13 @@
-from parse_data import  parse
-import pandas as pd
+#!/usr/bin/env python3
+
+# usage: python3 score.py data.json labels.csv
+
+from scipy.stats import spearmanr
+import sys
 import numpy as np
-from scipy import stats
-
-def spearman(a, b):
-    return stats.spearmanr(a, b)[0]
-
-
-def local_scorer(train_filename, submition):
-    df = parse([train_filename])
-    subm = pd.read_csv(submition, index_col="dialogId")
-    preds = np.array(subm.Alice.tolist() + subm.Bob.tolist())
-    answer = np.array(df["AliceScore"].tolist() + df["BobScore"].tolist())
-    print(spearman(answer, preds))
-
-local_scorer("data/train_20170727.json", "data/final_answer.csv")
+import pandas as pd
+df=pd.read_json(sys.argv[1]).set_index("dialogId")
+df["qualA"]=df.evaluation.apply(lambda x: sorted(x,key=lambda x:x['userId'])[0]['quality'])
+df["qualB"]=df.evaluation.apply(lambda x: sorted(x,key=lambda x:x['userId'])[1]['quality'])
+subm=pd.read_csv(sys.argv[2],index_col="dialogId")
+print(spearmanr(np.hstack([df.qualA,df.qualB]),np.hstack([subm.Alice,subm.Bob]))[0])
