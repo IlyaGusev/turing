@@ -234,11 +234,11 @@ features = build_feature_list(feature_templates)
 print("Features built")
 
 if sys.argv[2] == "3":
-    folder = "3_of_4"
+    folder = "3of4"
 elif sys.argv[2] == "4":
-    folder = "all"
+    folder = "All"
 
-folder = "models_akiiino_{}".format(folder)
+folder = "modelsAkiiino{}".format(folder)
 
 if sys.argv[1] == "train":
     os.mkdir(folder)
@@ -290,4 +290,4 @@ print("Predicting")
 pred_A = clf_A.predict(T)
 pred_B = clf_B.predict(T)
 
-pd.DataFrame(np.stack([pred_A, pred_B]).T, index=test.index, columns=["Alice", "Bob"]).to_csv("data/pred_akiiino.csv")
+pd.DataFrame(np.stack([pred_A, pred_B]).T, index=test.index, columns=["Alice", "Bob"]).to_csv("data/answer-akiiino.csv")
