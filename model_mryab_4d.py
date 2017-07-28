@@ -230,7 +230,7 @@ T = np.stack([np.concatenate(T[i]) for i in range(T.shape[0])])
 with open("models_mryab/mryab_stregr_a_4.pkl", "rb") as file:
     stregr_a = pickle.load(file)
 
-with open("models_mryab/mryab_stregr_a_4.pkl", "rb") as file:
+with open("models_mryab/mryab_stregr_b_4.pkl", "rb") as file:
     stregr_b = pickle.load(file)
 
 pred_a = stregr_a.predict(T)
