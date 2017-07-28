@@ -2,10 +2,11 @@ import os
 import gc
 import itertools
 import copy
+import pickle
+import argparse
 
 import pandas as pd
 import numpy as np
-import xgboost as xgb
 from scipy import stats
 
 from sklearn.svm import LinearSVC
@@ -25,7 +26,7 @@ def spearman(a, b):
     return stats.spearmanr(a, b)[0]
 
 
-def collect_all_features(filenames):
+def collect_all_features(filenames, model_dir="modelsIlya"):
     df = parse(filenames)
     data = pd.DataFrame()
     data["dialogId"] = df["dialogId"].tolist() + df["dialogId"].tolist()
@@ -89,42 +90,57 @@ def collect_all_features(filenames):
 
     if bow_enable:
         print("BoW step...")
-        bow_train_data, _ = bow(data["userConcatenatedMessages"].tolist(), [], tokenizer=text_to_wordlist, bow_ngrams=(1, 2))
+        dump_filename = os.path.join(model_dir, "bow_vectorizer.pickle")
+        vectorizer = None
+        if os.path.exists(dump_filename):
+            with open(dump_filename, "rb") as f:
+                vectorizer = pickle.load(f)
+        bow_train_data, _, vectorizer = bow(data["userConcatenatedMessages"].tolist(), [],
+                                            tokenizer=text_to_wordlist, bow_ngrams=(1, 2), vectorizer=vectorizer)
         data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
-
-    if rbow_enable:
-        print("RBoW step...")
-        bow_train_data, _ = bow(data["userOpponentConcatenatedMessages"].tolist(), [], tokenizer=text_to_wordlist)
-        data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
+        with open(dump_filename, "wb") as f:
+            pickle.dump(vectorizer, f)
 
     if boc_enable:
         print("BoC step...")
-        bow_train_data, _ = bow(data["userConcatenatedMessages"].tolist(), [], tokenizer=text_to_charlist, bow_ngrams=(1, 3))
+        dump_filename = os.path.join(model_dir, "boc_vectorizer.pickle")
+        vectorizer = None
+        if os.path.exists(dump_filename):
+            with open(dump_filename, "rb") as f:
+                vectorizer = pickle.load(f)
+        bow_train_data, _, vectorizer = bow(data["userConcatenatedMessages"].tolist(), [],
+                                            tokenizer=text_to_charlist, bow_ngrams=(1, 3), vectorizer=vectorizer)
         data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
-
-    if rboc_enable:
-        print("RBoC step...")
-        bow_train_data, _ = bow(data["userOpponentConcatenatedMessages"].tolist(), [], tokenizer=text_to_charlist)
-        data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
+        with open(dump_filename, "wb") as f:
+            pickle.dump(vectorizer, f)
     return data
 
 
-def answer_bot(data, train_indices, test_indices, clf_name="lgbm"):
+def answer_bot(data, train_indices, test_indices, clf_name="lgbm", model_dir="modelsIlya"):
     answers = np.array([int(i) if not np.isnan(i) else np.NaN for i in data["userIsBot"].tolist()])
-    data = data.drop(["userMessages", "userMessageMask", "userConcatenatedMessages", "userIsBot", "dialogId", "context",
-                      "userScores", "userOpponentMessages", "userOpponentConcatenatedMessages"], axis=1)
-    if clf_name == "lgbm":
-        clf = LGBMClassifier(n_estimators=500, num_leaves=1000, learning_rate=0.01, subsample=0.9, seed=42)
-        clf.fit(data.loc[train_indices, :], answers[train_indices], eval_metric="accuracy")
-    if clf_name == "svm":
-        clf = LinearSVC(tol=0.1)
+    data = data.drop(
+        ["userMessages", "userMessageMask", "userConcatenatedMessages", "userIsBot", "dialogId", "context",
+         "userScores", "userOpponentMessages", "userOpponentConcatenatedMessages"], axis=1)
+    dump_path = os.path.join(model_dir, "clf_" + clf_name + ".pickle")
+    if os.path.exists(dump_path):
+        with open(dump_path, "rb") as f:
+            clf = pickle.load(f)
+    else:
+        if clf_name == "lgbm":
+            clf = LGBMClassifier(n_estimators=500, num_leaves=1000, learning_rate=0.01, subsample=0.9, seed=42)
+        elif clf_name == "svm":
+            clf = LinearSVC(tol=0.1)
+        elif clf_name == "xgb":
+            data.columns = [i for i in range(len(data.columns))]
+            clf = XGBClassifier(n_estimators=500, max_depth=7, learning_rate=0.02, subsample=0.6, base_score=0.35, seed=42)
+        else:
+            assert False
         clf.fit(data.loc[train_indices, :], answers[train_indices])
+        with open(dump_path, "wb") as f:
+            pickle.dump(clf, f)
+
     if clf_name == "xgb":
         data.columns = [i for i in range(len(data.columns))]
-        clf = XGBClassifier(n_estimators=500, max_depth=7, learning_rate=0.02, subsample=0.6, base_score=0.35, seed=42)
-        X, y = data.loc[train_indices, :], answers[train_indices]
-        clf.fit(X, y, eval_metric="error", verbose=True)
-
     preds = clf.predict(data.loc[test_indices, :])
 
     run_cv = False
@@ -139,8 +155,8 @@ def answer_bot(data, train_indices, test_indices, clf_name="lgbm"):
     return preds
 
 
-def predict_regression(data, train_indices, test_indices, clf_name="xgb", reg_name="lgbm"):
-    bot_answers = answer_bot(data, train_indices, test_indices, clf_name)
+def predict_regression(data, train_indices, test_indices, clf_name="xgb", reg_name="lgbm", model_dir="modelsIlya"):
+    bot_answers = answer_bot(data, train_indices, test_indices, clf_name, model_dir=model_dir)
     answers = np.array([int(i) if not np.isnan(i) else np.NaN for i in data["userScores"].tolist()])
 
     l = data.shape[0] // 2
@@ -149,40 +165,50 @@ def predict_regression(data, train_indices, test_indices, clf_name="xgb", reg_na
     train_indices = copy.deepcopy(list(set(train_indices).difference(set(bot_scores_indices))))
 
     data = data.drop(["userMessages", "userMessageMask", "userConcatenatedMessages", "dialogId", "context",
-                      "userIsBot", "userScores", "userOpponentMessages", "userOpponentConcatenatedMessages"], axis=1)
+                      "userIsBot", "userScores", "userOpponentMessages", "userOpponentConcatenatedMessages"],
+                     axis=1)
 
-    if reg_name == "lasso":
-        clf = Lasso()
+    dump_path = os.path.join(model_dir, "reg_" + reg_name + ".pickle")
+    if os.path.exists(dump_path):
+        with open(dump_path, "rb") as f:
+            clf = pickle.load(f)
+    else:
+        if reg_name == "lasso":
+            clf = Lasso()
+        elif reg_name == "lgbm":
+            clf = LGBMRegressor(n_estimators=100)
+        elif reg_name == "xgb":
+            data.columns = [i for i in range(len(data.columns))]
+            clf = XGBRegressor(n_estimators=500, max_depth=7, learning_rate=0.02, subsample=0.6, seed=42)
+        else:
+            assert False
         clf.fit(data.loc[train_indices, :], answers[train_indices])
-    if reg_name == "lgbm":
-        clf = LGBMRegressor(n_estimators=100)
-        clf.fit(data.loc[train_indices, :], answers[train_indices], eval_metric="accuracy")
+        with open(dump_path, "wb") as f:
+            pickle.dump(clf, f)
     if reg_name == "xgb":
         data.columns = [i for i in range(len(data.columns))]
-        clf = XGBRegressor(n_estimators=500, max_depth=7, learning_rate=0.02, subsample=0.6, seed=42)
-        X, y = data.loc[train_indices, :], answers[train_indices]
-        clf.fit(X, y)
+    preds = clf.predict(data.loc[test_indices])
+    for i, is_bot in enumerate(bot_answers):
+        if is_bot == 1.0:
+            preds[test_indices.index(pairs[test_indices[i]])] = 0
+
     run_cv = False
     if run_cv:
         cv = ShuffleSplit(10, test_size=0.1, random_state=42)
         cv_scores = cross_val_score(clf, data.loc[train_indices, :], answers[train_indices], cv=cv,
                                     scoring=make_scorer(spearman))
         print("CV regr: %0.3f (+/- %0.3f)" % (cv_scores.mean(), cv_scores.std() * 2))
-
-    preds = clf.predict(data.loc[test_indices])
-    for i, is_bot in enumerate(bot_answers):
-        if is_bot == 1.0:
-            preds[test_indices.index(pairs[test_indices[i]])] = 0
     del data
     gc.collect()
     return preds
 
 
-def predict(train_filenames, test_filenames, clf_name="xgb", reg_name="lgbm"):
-    if len(test_filenames) == 0:
+def predict(train_filenames, test_filenames, clf_name="xgb", reg_name="lgbm", answer_path="answer.csv", load=True,
+            model_dir="modelsIlya"):
+    if len(test_filenames) == 0 and not load:
         print("Validation")
         scores = []
-        features = collect_all_features(train_filenames)
+        features = collect_all_features(train_filenames, model_dir=model_dir)
         for i in range(20):
             train_indices, test_indices, _, __ = train_test_split(range(features.shape[0] // 2),
                                                                   range(features.shape[0] // 2), test_size=0.1,
@@ -194,7 +220,7 @@ def predict(train_filenames, test_filenames, clf_name="xgb", reg_name="lgbm"):
             assert len(set(train_indices).intersection(set(test_indices))) == 0
 
             answers = np.array([int(i) for i in features["userScores"].tolist()])[test_indices]
-            preds = predict_regression(features, train_indices, test_indices, clf_name, reg_name)
+            preds = predict_regression(features, train_indices, test_indices, clf_name, reg_name, model_dir=model_dir)
 
             # suspicios_indices = [pairs[test_indices[i]] for i, answer in enumerate(answers) if answer != 0.0 and preds[i] == 0.0]
             # print(len(suspicios_indices))
@@ -207,17 +233,17 @@ def predict(train_filenames, test_filenames, clf_name="xgb", reg_name="lgbm"):
         print("CV: %0.3f (+/- %0.3f)" % (scores.mean(), scores.std()))
     else:
         print("Prediction")
-        features = collect_all_features(train_filenames+test_filenames)
+        features = collect_all_features(train_filenames+test_filenames, model_dir=model_dir)
         train_indices = features["userScores"].index[features["userScores"].apply(lambda x: not np.isnan(x))].tolist()
         test_indices = features["userScores"].index[features["userScores"].apply(np.isnan)].tolist()
-        preds = predict_regression(features, train_indices, test_indices, clf_name, reg_name).tolist()
+        preds = predict_regression(features, train_indices, test_indices, clf_name, reg_name, model_dir=model_dir).tolist()
         alice_preds = preds[:len(preds)//2]
         bob_preds = preds[len(preds)//2:]
         submission = pd.DataFrame({'dialogId': features["dialogId"][test_indices[:len(test_indices)//2]],
                                    'Alice': alice_preds,
                                    'Bob': bob_preds})
         submission = submission[["dialogId", "Alice", "Bob"]]
-        submission.to_csv(os.path.join(os.getcwd(), 'data', 'answer.csv'), index=False)
+        submission.to_csv(answer_path, index=False)
 
 
 def local_scorer(train_filename, submition):
@@ -228,7 +254,7 @@ def local_scorer(train_filename, submition):
     print(spearman(answer, preds))
 
 
-def avg_blending(filenames):
+def avg_blending(filenames, final_answer_path):
     dfs = []
     for filename in filenames:
         dfs.append(pd.read_csv(filename, header=0))
@@ -241,14 +267,28 @@ def avg_blending(filenames):
             df[user] = df[user] + data[user]
         df[user] = df[user].apply(lambda x: x/len(dfs))
     df = df[["dialogId", "Alice", "Bob"]]
-    df.to_csv(os.path.join('data', 'finalAnswer.csv'), index=False)
+    df.to_csv(final_answer_path, index=False)
 
-# if __name__ == "__main__":
-    # train_dir = "data/train"
-    # test_dir = "data/test"
-    #
-    # def get_all_files_in_dir(dir_name):
-    #     return [os.path.join(dir_name, filename) for filename in os.listdir(dir_name)]
-    # predict(get_all_files_in_dir(train_dir), get_all_files_in_dir(test_dir), clf_name="svm", reg_name="lasso")
-    # local_scorer("data/train/train_20170727.json", "data/avg.csv")
-    # avg_blending(["data/answer-0.62-xgb-lgbm.csv", "data/answer-0.66-svm-lasso.csv"])
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Set --days')
+    parser.add_argument('--days', dest='days', action='store', type=int, help='Num of days (3 or 4)', required=True)
+    args = parser.parse_args()
+    days = int(args.days)
+    if days == 3:
+        model_dir = "modelsIlya3of4"
+    else:
+        model_dir = "modelsIlyaAll"
+
+    train_dir = "data/train"
+    test_dir = "data/test"
+
+    def get_all_files_in_dir(dir_name):
+        return [os.path.join(dir_name, filename) for filename in os.listdir(dir_name)]
+    pairs = [("svm", "lasso"), ("xgb", "lgbm"), ("xgb", "xgb"), ("svm", "lgbm"), ("lgbm", "lasso"), ("xgb", "lasso")]
+    answers = [os.path.join("data", "answer-ilya-" + clf + "-" + reg + ".csv") for clf, reg in pairs]
+
+    for (clf, reg), answer_path in zip(pairs, answers):
+        predict([], get_all_files_in_dir(test_dir),
+                clf_name=clf, reg_name=reg, answer_path=answer_path, load=True, model_dir=model_dir)
+    avg_blending(answers, final_answer_path=os.path.join("data", "final_answer.csv"))
+    local_scorer("../train_20170727.json", "data/final_answer.csv")
