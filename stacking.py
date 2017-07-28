@@ -30,16 +30,19 @@ def f(path):
             process_file(os.path.join(path, file))
             for file in os.listdir(path)
             if file.startswith("train")
-        ]
+        ], axis=1
     )
 
     return data
 
+preds = pd.DataFrame()
+for file in os.listdir("data"):
+    if os.path.isfile(os.path.join("data", file)) and file.endswith(".csv"):
+        filename = os.path.join("data", file)
+        preds[file] = pd.read_csv(filename)["Alice"].tolist()+pd.read_csv(filename)["Bob"].tolist()
 
-preds = [pd.read_csv(file)[["Alice", "Bob"]] for file in os.listdir("data") if os.path.isfile(file) and file.endswith(".csv")]
-
-X = pd.concat(preds, axis=1).values
-y = f("data/train")
+y = f("data/train")["qualA"].tolist() + f("data/train")["qualB"].tolist()
 
 clf = Lasso()
-clf.fit(X, y)
+clf.fit(preds, y)
+clf.predict()

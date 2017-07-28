@@ -98,8 +98,9 @@ def collect_all_features(filenames, model_dir="modelsIlya"):
         bow_train_data, _, vectorizer = bow(data["userConcatenatedMessages"].tolist(), [],
                                             tokenizer=text_to_wordlist, bow_ngrams=(1, 2), vectorizer=vectorizer)
         data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
-        with open(dump_filename, "wb") as f:
-            pickle.dump(vectorizer, f)
+        if not os.path.exists(dump_filename):
+            with open(dump_filename, "wb") as f:
+                pickle.dump(vectorizer, f)
 
     if boc_enable:
         print("BoC step...")
@@ -111,8 +112,9 @@ def collect_all_features(filenames, model_dir="modelsIlya"):
         bow_train_data, _, vectorizer = bow(data["userConcatenatedMessages"].tolist(), [],
                                             tokenizer=text_to_charlist, bow_ngrams=(1, 3), vectorizer=vectorizer)
         data = pd.concat([data, pd.DataFrame(bow_train_data)], axis=1)
-        with open(dump_filename, "wb") as f:
-            pickle.dump(vectorizer, f)
+        if not os.path.exists(dump_filename):
+            with open(dump_filename, "wb") as f:
+                pickle.dump(vectorizer, f)
     return data
 
 
@@ -246,29 +248,6 @@ def predict(train_filenames, test_filenames, clf_name="xgb", reg_name="lgbm", an
         submission.to_csv(answer_path, index=False)
 
 
-def local_scorer(train_filename, submition):
-    df = parse([train_filename])
-    subm = pd.read_csv(submition, index_col="dialogId")
-    preds = np.array(subm.Alice.tolist() + subm.Bob.tolist())
-    answer = np.array(df["AliceScore"].tolist() + df["BobScore"].tolist())
-    print(spearman(answer, preds))
-
-
-def avg_blending(filenames, final_answer_path):
-    dfs = []
-    for filename in filenames:
-        dfs.append(pd.read_csv(filename, header=0))
-    df = pd.DataFrame()
-    df["dialogId"] = dfs[0]["dialogId"]
-    users = ["Alice", "Bob"]
-    for user in users:
-        df[user] = np.zeros((dfs[0].shape[0]))
-        for data in dfs:
-            df[user] = df[user] + data[user]
-        df[user] = df[user].apply(lambda x: x/len(dfs))
-    df = df[["dialogId", "Alice", "Bob"]]
-    df.to_csv(final_answer_path, index=False)
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Set --days')
     parser.add_argument('--days', dest='days', action='store', type=int, help='Num of days (3 or 4)', required=True)
@@ -290,5 +269,3 @@ if __name__ == "__main__":
     for (clf, reg), answer_path in zip(pairs, answers):
         predict([], get_all_files_in_dir(test_dir),
                 clf_name=clf, reg_name=reg, answer_path=answer_path, load=True, model_dir=model_dir)
-    avg_blending(answers, final_answer_path=os.path.join("data", "final_answer.csv"))
-    local_scorer("../train_20170727.json", "data/final_answer.csv")
