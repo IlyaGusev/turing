@@ -1,4 +1,6 @@
 import pandas as pd
+from keras.preprocessing.text import Tokenizer
+
 
 def process_data(filename,train=True):
     user={'Alice':1,'Bob':2}
