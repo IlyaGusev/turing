@@ -45,4 +45,5 @@ y = f("data/train")["qualA"].tolist() + f("data/train")["qualB"].tolist()
 
 clf = Lasso()
 clf.fit(preds, y)
-clf.predict()
+print([file for file in os.listdir("data") if os.path.isfile(os.path.join("data", file)) and file.endswith(".csv")])
+print(clf.coef_)

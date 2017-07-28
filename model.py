@@ -19,7 +19,7 @@ import stop_words
 
 np.random.seed(1337)
 
-with open("/usr/share/dict/words") as wordfile:
+with open("words.txt") as wordfile:
     words = set(x.strip().lower() for x in wordfile.readlines())
 
 
