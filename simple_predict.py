@@ -12,8 +12,10 @@ from sklearn.svm import LinearSVC
 from sklearn.model_selection import train_test_split, ShuffleSplit, cross_val_score
 from sklearn.linear_model import Lasso
 from sklearn.metrics import roc_auc_score, make_scorer
-
+from xgboost import XGBClassifier, XGBRegressor
 from lightgbm import LGBMClassifier, LGBMRegressor
+
+import stop_words
 
 from util import bow, text_to_wordlist, text_to_charlist
 from parse_data import parse
@@ -38,13 +40,16 @@ def collect_all_features(filenames):
     data["userScores"] = df["AliceScore"].tolist() + df["BobScore"].tolist()
 
     hand_crafted_enable = True
+    custom_enable = True
     bow_enable = True
     boc_enable = True
     rhand_crafted_enable = False
     rbow_enable = False
     rboc_enable = False
-    custom_enable = True
     if hand_crafted_enable:
+        data["isEmpty"] = data["userMessages"].apply(lambda x: len(x) == 0)
+        data["isEmptyDialog"] = (data["userOpponentMessages"].apply(lambda x: len(x) == 0)) & \
+                                (data["userMessages"].apply(lambda x: len(x) == 0))
         data["messageNum"] = data["userMessages"].apply(lambda x: len(x))
         data["numChars"] = data["userMessages"].apply(lambda x: sum([len(msg) for msg in x]))
         data["numWords"] = data["userMessages"].apply(lambda x: sum([len(msg.split()) for msg in x]))
@@ -58,13 +63,22 @@ def collect_all_features(filenames):
                                  for mask in masks]
             not_dict_word_count = [sum([1 for word in text_to_wordlist(msg) if word not in system_words])
                                    for msg in data["userConcatenatedMessages"].tolist()]
-            len_msg = [len(text_to_wordlist(msg)) for msg in data["userConcatenatedMessages"].tolist()]
-            data["notDictWordCount"] = not_dict_word_count
-            data["notDictWordCountPart"] = [float(count) / (1 + len_msg[i]) for i, count in enumerate(not_dict_word_count)]
+            len_msg = [len(text_to_wordlist(msg, remove_stopwords=False)) for msg in data["userConcatenatedMessages"].tolist()]
+            data["typoCount"] = not_dict_word_count
+            data["typoCountPart"] = [float(count) / (1 + len_msg[i]) for i, count in enumerate(not_dict_word_count)]
             context_word_count = [sum([1 for word in text_to_wordlist(text) if word in data["context"].tolist()[i]])
                                   for i, text in enumerate(data["userConcatenatedMessages"].tolist())]
-            data["wordInContext"] = context_word_count
-            data["wordInContextPart"] = [float(count) / (1 + len_msg[i]) for i, count in enumerate(context_word_count)]
+            data["relevantWords"] = context_word_count
+            data["relevantWordsPart"] = [float(count) / (1 + len_msg[i]) for i, count in enumerate(context_word_count)]
+            data["groupOf1"] = [sum([len(list(x)) == 1 for x in (g for k, g in itertools.groupby(mask) if k == 1)])
+                                for mask in masks]
+            data["groupOfNot1"] = [sum([len(list(x)) != 1 for x in (g for k, g in itertools.groupby(mask) if k == 1)])
+                                   for mask in masks]
+            stopwords = set(stop_words.get_stop_words("english"))
+            data["stopWordsCount"] = [sum([1 for word in text_to_wordlist(msg, remove_stopwords=False)
+                                           if word in stopwords]) for msg in data["userConcatenatedMessages"].tolist()]
+            data["notStopWordsCount"] = [sum([1 for word in text_to_wordlist(msg, remove_stopwords=False)
+                                              if word not in stopwords]) for msg in data["userConcatenatedMessages"].tolist()]
 
     if rhand_crafted_enable:
         data["RmessageNum"] = data["userOpponentMessages"].apply(lambda x: len(x))
@@ -95,38 +109,23 @@ def collect_all_features(filenames):
     return data
 
 
-def answer_bot(data, train_indices, test_indices):
+def answer_bot(data, train_indices, test_indices, clf_name="lgbm"):
     answers = np.array([int(i) if not np.isnan(i) else np.NaN for i in data["userIsBot"].tolist()])
     data = data.drop(["userMessages", "userMessageMask", "userConcatenatedMessages", "userIsBot", "dialogId", "context",
                       "userScores", "userOpponentMessages", "userOpponentConcatenatedMessages"], axis=1)
-    data.columns = [i for i in range(len(data.columns))]
-
-    xgb_enable = True
-    svm_enable = False
-    lgbm_enable = False
-    if xgb_enable:
-        params = {}
-        params['objective'] = 'binary:logistic'
-        params['eval_metric'] = 'auc'
-        params['eta'] = 0.02
-        params['max_depth'] = 7
-        params['subsample'] = 0.6
-        params['base_score'] = 0.2
-        params['silent'] = 1
-        rounds = 500
-        d_train = xgb.DMatrix(data.loc[train_indices, :], label=answers[train_indices])
-        d_test = xgb.DMatrix(data.loc[test_indices, :])
-        watchlist = [(d_train, 'train'),]
-        clf = xgb.train(params, d_train, rounds, watchlist, early_stopping_rounds=50, verbose_eval=50)
-        preds = [0 if i < 0.5 else 1 for i in clf.predict(d_test)]
-
-    if lgbm_enable or svm_enable:
-        if lgbm_enable:
-            clf = LGBMClassifier(n_estimators=100, num_leaves=1000)
-        if svm_enable:
-            clf = LinearSVC(tol=0.1)
+    if clf_name == "lgbm":
+        clf = LGBMClassifier(n_estimators=500, num_leaves=1000, learning_rate=0.01, subsample=0.9, seed=42)
+        clf.fit(data.loc[train_indices, :], answers[train_indices], eval_metric="accuracy")
+    if clf_name == "svm":
+        clf = LinearSVC(tol=0.1)
         clf.fit(data.loc[train_indices, :], answers[train_indices])
-        preds = clf.predict(data.loc[test_indices, :])
+    if clf_name == "xgb":
+        data.columns = [i for i in range(len(data.columns))]
+        clf = XGBClassifier(n_estimators=500, max_depth=7, learning_rate=0.02, subsample=0.6, base_score=0.35, seed=42)
+        X, y = data.loc[train_indices, :], answers[train_indices]
+        clf.fit(X, y, eval_metric="error", verbose=True)
+
+    preds = clf.predict(data.loc[test_indices, :])
 
     run_cv = False
     if run_cv:
@@ -140,8 +139,8 @@ def answer_bot(data, train_indices, test_indices):
     return preds
 
 
-def predict_regression(data, train_indices, test_indices):
-    bot_answers = answer_bot(data, train_indices, test_indices)
+def predict_regression(data, train_indices, test_indices, clf_name="xgb", reg_name="lgbm"):
+    bot_answers = answer_bot(data, train_indices, test_indices, clf_name)
     answers = np.array([int(i) if not np.isnan(i) else np.NaN for i in data["userScores"].tolist()])
 
     l = data.shape[0] // 2
@@ -151,12 +150,18 @@ def predict_regression(data, train_indices, test_indices):
 
     data = data.drop(["userMessages", "userMessageMask", "userConcatenatedMessages", "dialogId", "context",
                       "userIsBot", "userScores", "userOpponentMessages", "userOpponentConcatenatedMessages"], axis=1)
-    lasso_enable = False
-    lgbm_enable = True
-    if lasso_enable:
+
+    if reg_name == "lasso":
         clf = Lasso()
-    if lgbm_enable:
-        clf = LGBMRegressor()
+        clf.fit(data.loc[train_indices, :], answers[train_indices])
+    if reg_name == "lgbm":
+        clf = LGBMRegressor(n_estimators=100)
+        clf.fit(data.loc[train_indices, :], answers[train_indices], eval_metric="accuracy")
+    if reg_name == "xgb":
+        data.columns = [i for i in range(len(data.columns))]
+        clf = XGBRegressor(n_estimators=500, max_depth=7, learning_rate=0.02, subsample=0.6, seed=42)
+        X, y = data.loc[train_indices, :], answers[train_indices]
+        clf.fit(X, y)
     run_cv = False
     if run_cv:
         cv = ShuffleSplit(10, test_size=0.1, random_state=42)
@@ -164,7 +169,6 @@ def predict_regression(data, train_indices, test_indices):
                                     scoring=make_scorer(spearman))
         print("CV regr: %0.3f (+/- %0.3f)" % (cv_scores.mean(), cv_scores.std() * 2))
 
-    clf.fit(data.loc[train_indices, :], answers[train_indices])
     preds = clf.predict(data.loc[test_indices])
     for i, is_bot in enumerate(bot_answers):
         if is_bot == 1.0:
@@ -174,7 +178,7 @@ def predict_regression(data, train_indices, test_indices):
     return preds
 
 
-def predict(train_filenames, test_filenames):
+def predict(train_filenames, test_filenames, clf_name="xgb", reg_name="lgbm"):
     if len(test_filenames) == 0:
         print("Validation")
         scores = []
@@ -190,8 +194,11 @@ def predict(train_filenames, test_filenames):
             assert len(set(train_indices).intersection(set(test_indices))) == 0
 
             answers = np.array([int(i) for i in features["userScores"].tolist()])[test_indices]
-            preds = predict_regression(features, train_indices, test_indices)
+            preds = predict_regression(features, train_indices, test_indices, clf_name, reg_name)
 
+            # suspicios_indices = [pairs[test_indices[i]] for i, answer in enumerate(answers) if answer != 0.0 and preds[i] == 0.0]
+            # print(len(suspicios_indices))
+            # print(features.loc[suspicios_indices, :]["userConcatenatedMessages"].tolist())
             score = spearman(preds, answers)
             scores.append(score)
             print("Split: ", i, "Score: ", score, "Mean: ", np.mean(scores), "Median: ",
@@ -203,7 +210,7 @@ def predict(train_filenames, test_filenames):
         features = collect_all_features(train_filenames+test_filenames)
         train_indices = features["userScores"].index[features["userScores"].apply(lambda x: not np.isnan(x))].tolist()
         test_indices = features["userScores"].index[features["userScores"].apply(np.isnan)].tolist()
-        preds = predict_regression(features, train_indices, test_indices).tolist()
+        preds = predict_regression(features, train_indices, test_indices, clf_name, reg_name).tolist()
         alice_preds = preds[:len(preds)//2]
         bob_preds = preds[len(preds)//2:]
         submission = pd.DataFrame({'dialogId': features["dialogId"][test_indices[:len(test_indices)//2]],
@@ -234,14 +241,14 @@ def avg_blending(filenames):
             df[user] = df[user] + data[user]
         df[user] = df[user].apply(lambda x: x/len(dfs))
     df = df[["dialogId", "Alice", "Bob"]]
-    df.to_csv(os.path.join('submitions', 'avg.csv'), index=False)
+    df.to_csv(os.path.join('data', 'finalAnswer.csv'), index=False)
 
-if __name__ == "__main__":
-    train_dir = "data/train"
-    test_dir = "data/test"
-
-    def get_all_files_in_dir(dir_name):
-        return [os.path.join(dir_name, filename) for filename in os.listdir(dir_name)]
-    predict(get_all_files_in_dir(train_dir), get_all_files_in_dir(test_dir))
-    # local_scorer("data/train_20170726.json", "submitions/answerRegr.csv")
-    # avg_blending(["submitions/answer27-0.6.csv", "submitions/Max-answer27-0.5.csv", "submitions/Nik-answer27-0.33.csv"])
+# if __name__ == "__main__":
+    # train_dir = "data/train"
+    # test_dir = "data/test"
+    #
+    # def get_all_files_in_dir(dir_name):
+    #     return [os.path.join(dir_name, filename) for filename in os.listdir(dir_name)]
+    # predict(get_all_files_in_dir(train_dir), get_all_files_in_dir(test_dir), clf_name="svm", reg_name="lasso")
+    # local_scorer("data/train/train_20170727.json", "data/avg.csv")
+    # avg_blending(["data/answer-0.62-xgb-lgbm.csv", "data/answer-0.66-svm-lasso.csv"])

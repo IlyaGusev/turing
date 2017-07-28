@@ -4,11 +4,15 @@ import re
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from nltk import pos_tag
 from nltk.tokenize import TweetTokenizer
+import stop_words
 
 
-def text_to_wordlist(sentence):
+def text_to_wordlist(sentence, remove_stopwords=True):
     tokenizer = TweetTokenizer()
-    return [word.lower() for word in tokenizer.tokenize(sentence)]
+    stopwords = []
+    if remove_stopwords:
+        stopwords = set(stop_words.get_stop_words("english"))
+    return [word.lower() for word in tokenizer.tokenize(sentence) if word.lower() not in stopwords]
 
 
 def text_to_wordlist_word_only(sentence):
