@@ -3,15 +3,13 @@ from scipy.stats import spearmanr
 import pandas as pd
 import numpy as np
 import os
+import sys
 
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
-
-from sklearn.model_selection import cross_val_score, KFold
 
 from lightgbm.sklearn import LGBMRegressor
 import string
 from nltk.tokenize import TreebankWordTokenizer
-from xgboost import XGBRegressor
 from difflib import SequenceMatcher
 
 import pickle
@@ -233,55 +231,63 @@ feature_templates = [
 
 features = build_feature_list(feature_templates)
 
+print("Features built")
 
-data, vectorizers = process_data("../train/", train=True)
+if sys.argv[2] == "3":
+    folder = "3_of_4"
+elif sys.argv[2] == "4":
+    folder = "all"
 
-X = data[features].values
-X = np.stack([np.concatenate(X[i]) for i in range(X.shape[0])])
+folder = "models_akiiino_{}".format(folder)
 
-y_A = data["qualA"].values
-y_B = data["qualB"].values
+if sys.argv[1] == "train":
+    os.mkdir(folder)
 
-clf_A = LGBMRegressor(n_estimators=100, num_leaves=1000)
-clf_A.fit(X, y_A)
-clf_B = LGBMRegressor(n_estimators=100, num_leaves=1000)
-clf_B.fit(X, y_B)
+    print("Processing data")
+    data, vectorizers = process_data("data/train/", train=True)
 
-valid, _ = process_data("../data/train_20170727.json", train=True, vectorizers=vectorizers)
+    X = data[features].values
+    X = np.stack([np.concatenate(X[i]) for i in range(X.shape[0])])
 
-my = pd.read_csv("my.csv")
-svm_lasso = pd.read_csv("svm_lasso.csv")
-xgb_lgbm = pd.read_csv("xgb_lgbm.csv")
-subm = pd.read_csv("subm.csv", header=None)
+    y_A = data["qualA"].values
+    y_B = data["qualB"].values
 
-lol = pd.concat([pd.DataFrame(X), my[["Alice", "Bob"]], svm_lasso[["Alice", "Bob"]], xgb_lgbm[["Alice", "Bob"]], subm[[1, 2]]], axis=1).values
+    print("Starting training")
 
-clf_2_A = XGBRegressor()
-clf_2_A.fit(lol, y_A)
-clf_2_B = XGBRegressor()
-clf_2_B.fit(lol, y_B)
+    clf_A = LGBMRegressor(n_estimators=100, num_leaves=1000)
+    clf_B = LGBMRegressor(n_estimators=100, num_leaves=1000)
+    clf_A.fit(X, y_A)
+    clf_B.fit(X, y_B)
 
+    print("Saving")
 
-X_27 = np.stack([np.concatenate(X_27[i]) for i in range(X_27.shape[0])])
+    with open(os.path.join(folder, "clf_A.pkl"), 'wb') as file:
+        pickle.dump(clf_A, file)
+    with open(os.path.join(folder, "clf_B.pkl"), 'wb') as file:
+        pickle.dump(clf_B, file)
+    with open(os.path.join(folder, "vectorizers.pkl"), 'wb') as file:
+        pickle.dump(vectorizers, file)
 
-y_A_27 = data["qualA"].values
-y_B_27 = data["qualB"].values
+elif sys.argv[1] == "load":
+    print("Loading")
 
-test, *_ = process_data("../data/test_20170727.json", train=False, vectorizers=vectorizers)
+    with open(os.path.join(folder, "clf_A.pkl"), 'rb') as file:
+        clf_A = pickle.load(file)
+    with open(os.path.join(folder, "clf_B.pkl"), 'rb') as file:
+        clf_B = pickle.load(file)
+    with open(os.path.join(folder, "vectorizers.pkl"), 'rb') as file:
+        vectorizers = pickle.load(file)
+
+print("Loading test")
+
+test, *_ = process_data("data/test/", train=False, vectorizers=vectorizers)
 
 T = test[features].values
 T = np.stack([np.concatenate(T[i]) for i in range(T.shape[0])])
 
+print("Predicting")
+
 pred_A = clf_A.predict(T)
 pred_B = clf_B.predict(T)
 
-pd.DataFrame(np.stack([pred_A, pred_B]).T, index=test.index, columns=["Alice", "Bob"]).to_csv("pred.csv")
-
-y_V = valid["qualA"].values
-
-cv = cross_val_score(XGBRegressor(), lol, y_V, scoring=spearmancorr, cv=KFold(10, True, 123), verbose=3)
-cv.mean(), cv.std()
-
-pred
-
-spearmanr(np.reshape(pred[["Alice", "Bob"]].values, (-1, 1)), np.reshape(valid[["qualA", "qualB"]].values, (-1, 1)))
+pd.DataFrame(np.stack([pred_A, pred_B]).T, index=test.index, columns=["Alice", "Bob"]).to_csv("data/pred_akiiino.csv")
