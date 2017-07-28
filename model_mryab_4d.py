@@ -188,7 +188,7 @@ def process_data(path, exclude=[], train=True, vectorizers=None):
     return data, vectorizers
 
 
-with open("models_mryab/vectorizers.pkl", "rb") as f:
+with open("models_mryab/vectorizers_4d.pkl", "rb") as f:
     vectorizers = pickle.load(f)
 
 feat_templates = [
