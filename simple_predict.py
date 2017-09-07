@@ -45,8 +45,6 @@ def collect_all_features(filenames, model_dir="modelsIlya"):
     bow_enable = True
     boc_enable = True
     rhand_crafted_enable = False
-    rbow_enable = False
-    rboc_enable = False
     if hand_crafted_enable:
         data["isEmpty"] = data["userMessages"].apply(lambda x: len(x) == 0)
         data["isEmptyDialog"] = (data["userOpponentMessages"].apply(lambda x: len(x) == 0)) & \
@@ -56,6 +54,49 @@ def collect_all_features(filenames, model_dir="modelsIlya"):
         data["numWords"] = data["userMessages"].apply(lambda x: sum([len(msg.split()) for msg in x]))
         data["avgChars"] = data["userMessages"].apply(lambda x: np.mean([0] + [len(msg) for msg in x]))
         data["avgWords"] = data["userMessages"].apply(lambda x: np.mean([0] + [len(msg.split()) for msg in x]))
+
+        # import matplotlib.pyplot as plt
+        # n, bins, patches = plt.hist(data[data["numChars"] != 0]["numChars"], 100, facecolor='green', alpha=0.75)
+        # plt.xlabel('Number of words')
+        # plt.ylabel('Person count')
+        # plt.title(r'Histogram of word count (without persons with 0 messages)')
+        # plt.axis([0, 600, 0, 300])
+        # plt.grid(True)
+        # plt.show()
+        #
+        # import matplotlib.pyplot as plt
+        # arr = data[data["userScores"] != 0.0]["userScores"].tolist()
+        # # n, bins, patches = plt.hist(, 5, facecolor='red', alpha=0.8, align='left')
+        # plt.xlabel('Score')
+        # plt.ylabel('Person count')
+        # plt.title(r'Scores')
+        # # plt.axis([0.5, 5.5, 0, 1000])
+        # # plt.grid(True)
+        # # plt.show()
+        # labels, counts = np.unique(arr, return_counts=True)
+        # plt.bar(labels, counts, align='center', color="red")
+        # plt.gca().set_xticks(labels)
+        # plt.show()
+        # from collections import Counter
+        # counter = Counter()
+        # for words in [text_to_wordlist(message, remove_stopwords=True) for message in data["userConcatenatedMessages"].tolist()]:
+        #     for word in words:
+        #         counter[word] += 1
+        # print(counter.most_common(50))
+
+
+        # from wordcloud import WordCloud, STOPWORDS
+        # import matplotlib.pyplot as plt
+        # wordcloud = WordCloud(stopwords=set(),
+        #                       background_color='white',
+        #                       width=3000,
+        #                       height=3000
+        #                       ).generate(" ".join([" ".join(text_to_wordlist(message)) for message in data["userConcatenatedMessages"].tolist()]))
+        # plt.imshow(wordcloud)
+        # plt.axis('off')
+        # plt.show()
+
+
         if custom_enable:
             with open("words.txt") as wordfile:
                 system_words = set(x.strip().lower() for x in wordfile.readlines())
@@ -249,23 +290,28 @@ def predict(train_filenames, test_filenames, clf_name="xgb", reg_name="lgbm", an
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Set --days')
-    parser.add_argument('--days', dest='days', action='store', type=int, help='Num of days (3 or 4)', required=True)
-    args = parser.parse_args()
-    days = int(args.days)
-    if days == 3:
-        model_dir = "modelsIlya3of4"
-    else:
-        model_dir = "modelsIlyaAll"
-
+#     parser = argparse.ArgumentParser(description='Set --days')
+#     parser.add_argument('--days', dest='days', action='store', type=int, help='Num of days (3 or 4)', required=True)
+#     args = parser.parse_args()
+#     days = int(args.days)
+#     if days == 3:
+#         model_dir = "modelsIlya3of4"
+#     else:
+#         model_dir = "modelsIlyaAll"
+#
     train_dir = "data/train"
     test_dir = "data/test"
-
+    model_dir = "modelsIlyaAll"
+#
     def get_all_files_in_dir(dir_name):
         return [os.path.join(dir_name, filename) for filename in os.listdir(dir_name)]
-    pairs = [("svm", "lasso"), ("xgb", "lgbm"), ("xgb", "xgb"), ("svm", "lgbm"), ("lgbm", "lasso"), ("xgb", "lasso")]
-    answers = [os.path.join("data", "answer-ilya-" + clf + "-" + reg + ".csv") for clf, reg in pairs]
 
-    for (clf, reg), answer_path in zip(pairs, answers):
-        predict([], get_all_files_in_dir(test_dir),
-                clf_name=clf, reg_name=reg, answer_path=answer_path, load=True, model_dir=model_dir)
+    features = collect_all_features(get_all_files_in_dir(test_dir), model_dir=model_dir)
+    print(features.shape)
+    #
+    # pairs = [("svm", "lasso"), ("xgb", "lgbm"), ("xgb", "xgb"), ("svm", "lgbm"), ("lgbm", "lasso"), ("xgb", "lasso")]
+    # answers = [os.path.join("data", "answer-ilya-" + clf + "-" + reg + ".csv") for clf, reg in pairs]
+    #
+    # for (clf, reg), answer_path in zip(pairs, answers):
+    #     predict(get_all_files_in_dir(train_dir), [],
+    #             clf_name=clf, reg_name=reg, answer_path=answer_path, load=False, model_dir=model_dir)

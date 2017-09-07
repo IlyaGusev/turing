@@ -14,4 +14,4 @@ def local_scorer(train_filename, submition):
     answer = np.array(df["AliceScore"].tolist() + df["BobScore"].tolist())
     print(spearman(answer, preds))
 
-local_scorer("data/train/train_20170727.json", "data/final_answer.csv")
+local_scorer("train_final.json", "data/answer-ilya-svm-lasso.csv")
