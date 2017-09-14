@@ -3,4 +3,4 @@ services:
   web:
     build: .
     volumes:
-      - ./data:/code/data
+      - ./submitions:/module/submitions

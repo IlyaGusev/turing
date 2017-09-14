@@ -1,6 +1,7 @@
 #!/bin/bash
 
-python3 simple_predict.py --days 4
-python3 model.py load 4
-python3 model_mryab_4d.py
+cd code
+python3 modelA.py
+python3 modelB.py load
+python3 modelC.py
 python3 avg.py
